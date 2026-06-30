@@ -1,0 +1,54 @@
+name: OnlyFans Metadata Sync
+description: Sync OF-Scraper metadata (title, details, date, URL, performers, studio) from user_data.db files into matching Stash scenes and images.
+version: 1.0.0
+url: https://github.com/cgnz2002/stash-plugins
+
+settings:
+  dataPath:
+    displayName: OF-Scraper Data Path
+    description: "Directory (as seen inside the Stash container) searched recursively for OF-Scraper user_data.db files. Example: /data/only fans"
+    type: STRING
+  parentStudioName:
+    displayName: Parent Studio Name
+    description: "Name of the top-level OnlyFans studio. Per-creator studios are created beneath it. Default: OnlyFans (network)"
+    type: STRING
+  maxTitleLength:
+    displayName: Max Title Length
+    description: "Maximum length of a generated title before it is truncated at a sentence or word boundary. Default: 65"
+    type: NUMBER
+  multiplePerformersOk:
+    displayName: Allow Multiple Performer Matches
+    description: "If several performers match a username, attach all of them. Default off: the creator is skipped when the match is ambiguous."
+    type: BOOLEAN
+  autoCreatePerformers:
+    displayName: Create Missing Performers
+    description: "When on, create a sparse performer for the creator (and any unmatched @mentions in the post text) instead of skipping. Default off."
+    type: BOOLEAN
+  autoTagFromText:
+    displayName: Auto-tag From Post Text
+    description: "When on, scan each post's text and attach any existing Stash tags whose name or alias appears in it (matched the same way as Stash's auto-tagger). Only tags are added, never created. Tags set to ignore auto-tag are skipped. Default off."
+    type: BOOLEAN
+  skipMultiFile:
+    displayName: Skip Multi-file Scenes and Images
+    description: "When on, the Sync and Full Sync tasks skip any scene or image that has more than one file (typically merged scenes from multiple OF pages), to avoid overwriting their performers and metadata. Does not affect the Tag task. Default off."
+    type: BOOLEAN
+
+exec:
+  - python
+  - "{pluginDir}/sync.py"
+interface: raw
+errLog: error
+
+tasks:
+  - name: Sync OF Metadata
+    description: Sync metadata to unorganized OnlyFans scenes and images.
+    defaultArgs:
+      mode: sync
+  - name: Full Sync OF Metadata
+    description: Re-sync ALL OnlyFans scenes and images, ignoring the organized flag.
+    defaultArgs:
+      mode: full
+  - name: Tag OF From Text
+    description: Add tags from post text to ALL OnlyFans scenes and images. Only adds tags, leaves every other field untouched. Safe for manually edited scenes.
+    defaultArgs:
+      mode: tag
