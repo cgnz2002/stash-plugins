@@ -1,6 +1,6 @@
 name: OnlyFans Metadata Sync
 description: Sync OF-Scraper metadata (title, details, date, URL, performers, studio) from user_data.db files into matching Stash scenes and images.
-version: 1.0.0
+version: 1.1.0
 url: https://github.com/cgnz2002/stash-plugins
 
 settings:
