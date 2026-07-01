@@ -54,14 +54,21 @@ manifest). At runtime:
   using the **session cookie** from stdin — no API key.
 - Progress and messages are written to **stderr** with the SOH/level/STX prefix
   scheme (`log.py`) so they appear in the Stash log viewer and task bar.
-- The final result is printed to **stdout** as JSON (`{"output": "ok"}`).
+- The final result is printed to **stdout** as JSON: `{"output": "ok"}` on
+  success, or `{"error": "..."}` on a fatal failure (Stash logs the `error` at
+  error level and marks the task failed). `main()` returns the error string;
+  keep that contract when adding new fatal-exit paths.
 
-The three tasks are defined in the manifest and selected by `args.mode`:
+The four tasks are defined in the manifest and selected by `args.mode`:
 
 - `mode: sync` — only unorganized OnlyFans scenes/images.
 - `mode: full` — re-sync everything, ignoring the `organized` flag.
 - `mode: tag` — additive only; adds tags from post text, never touches other
   fields. Safe over manually edited media.
+- `mode: crew` — surgical crew-credit pass. For all OnlyFans media it moves
+  crew-tagged people out of the performers list and into the scene `director` /
+  image `photographer` field, leaving every other field untouched. Skips media
+  that already match, and never creates performers (even with auto-create on).
 
 ## Architecture notes
 
@@ -72,7 +79,10 @@ The three tasks are defined in the manifest and selected by `args.mode`:
   (`mode=ro` URI) so a concurrently running OF-Scraper never causes a write or
   "readonly database" error. Schema verified against **OF-Scraper 3.14.7**. Post
   text is searched across the `posts`, `stories`, `messages`, `others`, and
-  `products` tables.
+  `products` tables. It **detects the schema at open time** (`_detect_schema`) to
+  also support older OF-Scraper databases, which lack `medias.model_id`, store
+  the date in `created_at` instead of `posted_at`, and leave `profiles` empty
+  (the creator name is then recovered from `medias.directory`).
 - **`MediaProcessor` (media.py)** — turns post text into title/details, parses
   `@mentions`, derives studio code from filename, formats dates. Tag matching
   (`compile_name_pattern`) mirrors Stash's own auto-tagger
@@ -81,6 +91,14 @@ The three tasks are defined in the manifest and selected by `args.mode`:
   `TagTextMatcher` each cache lookups and create-if-missing where appropriate.
   Updates are routed by where the media actually lives in Stash
   (scene -> `sceneUpdate`, image -> `imageUpdate`).
+- **Crew credit** — a performer carrying the configurable *Crew Tag* (default
+  `OnlyFans Crew`) is treated as crew: `collect_crew` credits them in the scene
+  `director` / image `photographer` field instead of the performers list, for
+  both the creator and any @mentioned collaborator. The creator is still added
+  as a performer when a post credits only crew (so media is never
+  performer-less), and the **studio always follows the source db**, never the
+  credited director. `build_update` applies this during sync; `build_crew_only_update`
+  applies just this part for the `crew` task.
 
 ## Hard constraints — keep these intact
 
@@ -91,10 +109,16 @@ The three tasks are defined in the manifest and selected by `args.mode`:
 - **Databases are opened read-only.** Never change `OFDatabase` to open for write.
 - **GraphQL fields must match the Stash schema** (currently v0.31.x). Verify any
   new field/query against the running Stash version before relying on it.
-- **The tag-only path is additive.** `build_tag_only_update` must only ever add
-  tags and leave all other fields untouched (Stash only mutates fields you send).
+  Note the asymmetry: `director` exists only on scenes, `photographer` only on
+  images — credit each on the media type that has it.
+- **The tag-only and crew paths are surgical.** `build_tag_only_update` only ever
+  adds tags; `build_crew_only_update` only ever touches `performer_ids` and the
+  `director`/`photographer` field, and returns `(None, None)` when nothing
+  changes. Both leave all other fields untouched (Stash only mutates fields you
+  send), so manual edits survive. Keep them that way.
 - Updates set `organized: True` so the normal `sync` pass skips them next time —
-  don't drop this from the regular sync update.
+  don't drop this from the regular sync update. (The `tag` and `crew` passes do
+  not set it, so they don't disturb the sync/organized workflow.)
 
 ## Building / distributing
 

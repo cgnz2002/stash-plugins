@@ -22,8 +22,12 @@ creator profile in it:
 - Sets **title** and **details** from the post text, **date** from the OF post
   date, **studio**, **code** (OF media id), **URL** to the original post, and
   **performers** (the creator plus any `@mentioned` accounts).
+- Credits anyone tagged as **crew** (see *Crew Tag Name*) in the scene
+  **Director** / image **Photographer** field instead of the performers list.
 - Optionally tags media `paid` / `archived`.
 - Marks each synced item **organized** so the normal sync skips it next time.
+
+Both current and older OF-Scraper database layouts are supported.
 
 ## Requirements
 
@@ -52,6 +56,7 @@ creator profile in it:
 | Create Missing Performers | off | Create a sparse performer for the creator and any unmatched `@mentions` instead of skipping. |
 | Auto-tag From Post Text | off | Scan each post's text and attach any existing Stash tags whose name or alias appears in it. |
 | Skip Multi-file Scenes and Images | off | Sync and Full Sync skip any scene or image with more than one file (e.g. merged scenes), to protect their performers and metadata. Does not affect the Tag task. |
+| Crew Tag Name | `OnlyFans Crew` | A performer with this Stash tag is treated as crew: their name goes in each scene's Director field and each image's Photographer field instead of the performers list. Applies to the creator and any `@mentioned` collaborator. |
 
 ## Tasks
 
@@ -66,9 +71,27 @@ Stash first so the scenes and images exist.
   existing tags. Use this to tag media without a full re-sync overwriting manual
   edits. It always matches tags from text regardless of the *Auto-tag From Post
   Text* setting.
+- **Update Crew** - re-apply only the crew logic to ALL OnlyFans scenes and
+  images: move crew-tagged people (see *Crew Tag Name*) into the Director /
+  Photographer field and out of the performers list. It leaves titles, dates,
+  studios, tags and everything else untouched, skips media that already match,
+  and never creates performers. Use it after tagging newly generated performers
+  as crew, instead of a full re-sync.
 
 The settings toggles above appear alongside these task buttons and apply to the
 sync tasks.
+
+### Crew (directors / photographers)
+
+Some creators you follow are directors or photographers rather than the on-screen
+talent. Tag their Stash performer with the *Crew Tag Name* (default
+`OnlyFans Crew`) and the plugin will, on any sync or the **Update Crew** task,
+put their name in the scene **Director** and image **Photographer** fields
+instead of adding them as a performer. This applies both to the creator whose
+database is being read and to anyone they `@mention` (e.g. a guest director on a
+performer's own page). The studio always follows where the media was sourced
+from, and if a post credits only crew the creator is still added as a performer
+so the media is never left empty.
 
 ## Notes
 
@@ -76,6 +99,9 @@ sync tasks.
   safe.
 - Post text is read from the `posts`, `stories`, `messages`, `others` and
   `products` tables.
+- Older OF-Scraper databases (empty `profiles` table, no `medias.model_id`, date
+  in `created_at`) are detected automatically; the creator name is recovered from
+  the media directory path.
 - **Auto-tag From Post Text** exists because Stash's built-in auto-tagger skips
   organized media, and this plugin marks synced media organized. It matches the
   post text against existing tag names and aliases using the same word-boundary

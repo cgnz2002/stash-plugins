@@ -510,8 +510,9 @@ def main():
     try:
         config = client.get_plugin_config(PLUGIN_ID)
     except RuntimeError as e:
-        log.LogError("Could not read plugin settings: {}".format(e))
-        return
+        msg = "Could not read plugin settings: {}".format(e)
+        log.LogError(msg)
+        return msg
 
     data_path = get_setting(config, "dataPath", "")
     parent_studio_name = get_setting(config, "parentStudioName", DEFAULT_PARENT_STUDIO)
@@ -526,10 +527,9 @@ def main():
     crew_tag = get_setting(config, "crewTag", DEFAULT_CREW_TAG)
 
     if not data_path:
-        log.LogError(
-            "No data path configured. Set 'OF-Scraper Data Path' in the plugin settings."
-        )
-        return
+        msg = "No data path configured. Set 'OF-Scraper Data Path' in the plugin settings."
+        log.LogError(msg)
+        return msg
 
     if tag_only:
         log.LogInfo("Starting OnlyFans tag-only pass. Data path: {}".format(data_path))
@@ -546,11 +546,12 @@ def main():
     if not tag_only and not crew_only:
         parent_studio_id = client.find_studio(parent_studio_name)
         if not parent_studio_id:
-            log.LogError(
+            msg = (
                 "Parent studio '{}' not found in Stash. Create it (or fix the "
                 "Parent Studio Name setting) and retry.".format(parent_studio_name)
             )
-            return
+            log.LogError(msg)
+            return msg
 
     databases = OFDatabase.find_databases(data_path)
     log.LogInfo("Found {} user_data.db file(s)".format(len(databases)))
@@ -560,7 +561,10 @@ def main():
 
     processor = MediaProcessor(max_title_length)
     studios = StudioResolver(client, parent_studio_id, load_icon(server))
-    performers = PerformerResolver(client, auto_create, crew_tag)
+    # The crew pass is surgical maintenance: it must never create performers as
+    # a side effect of resolving @mentions, even if Create Missing Performers is
+    # enabled for the sync tasks.
+    performers = PerformerResolver(client, auto_create and not crew_only, crew_tag)
     tags = TagResolver(client)
     # The tag-only task always matches tags from text; the regular sync only
     # does so when the setting is enabled.
@@ -605,6 +609,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
-    # Raw plugins return their result as JSON on stdout.
-    print(json.dumps({"output": "ok"}))
+    # Raw plugins return their result as JSON on stdout. A non-empty error is
+    # logged by Stash at the error level and marks the task as failed.
+    error = main()
+    print(json.dumps({"error": error} if error else {"output": "ok"}))
