@@ -20,6 +20,8 @@ PLUGIN_ID = "of-stash-sync"
 
 DEFAULT_PARENT_STUDIO = "OnlyFans (network)"
 DEFAULT_MAX_TITLE_LENGTH = 65
+DEFAULT_DIRECTOR_TAG = "OnlyFans Director"
+DEFAULT_PHOTOGRAPHER_TAG = "OnlyFans Photographer"
 
 
 def get_setting(config, key, default):
@@ -36,17 +38,42 @@ def of_url(username):
 class PerformerResolver:
     """Find performers by name/alias, optionally creating missing ones."""
 
-    def __init__(self, client, auto_create):
+    def __init__(self, client, auto_create, director_tag="", photographer_tag=""):
         self.client = client
         self.auto_create = auto_create
+        self.director_tag = (director_tag or "").strip().lower()
+        self.photographer_tag = (photographer_tag or "").strip().lower()
         self.cache = {}
+        # username -> {"roles": set(), "name": str} for the crew-credit logic
+        self.info_cache = {}
+
+    def creator_credit(self, username):
+        """Return (roles, name) for a creator: which crew tags (director/
+        photographer) the matched performer carries, and its display name.
+        resolve() must have been called for the username first.
+        """
+        info = self.info_cache.get(username.lower())
+        if not info:
+            return set(), None
+        return info["roles"], info["name"]
 
     def resolve(self, username, from_mention=False):
         key = username.lower()
         if key in self.cache:
             return self.cache[key]
         result = self.client.find_performers_by_name(username)
-        ids = [p["id"] for p in result["exact"]]
+        exact = result["exact"]
+        ids = [p["id"] for p in exact]
+        # Record crew roles + display name so a director/photographer creator can
+        # be credited in the director/photographer field instead of as a performer.
+        roles = set()
+        for p in exact:
+            ptags = {(t.get("name") or "").lower() for t in (p.get("tags") or [])}
+            if self.director_tag and self.director_tag in ptags:
+                roles.add("director")
+            if self.photographer_tag and self.photographer_tag in ptags:
+                roles.add("photographer")
+        self.info_cache[key] = {"roles": roles, "name": exact[0]["name"] if exact else None}
         if not ids and self.auto_create:
             # Stash treats EQUALS as a SQL LIKE, so a username containing '_'
             # (a wildcard) can collide with an existing performer name on
@@ -200,8 +227,8 @@ def build_tag_only_update(db, processor, media_row, tags, tag_matcher,
     return {"tag_ids": merged}, added
 
 
-def build_update(db, processor, profile, media_row, performer_ids, studio_id,
-                 resolver, tags, tag_matcher):
+def build_update(db, processor, profile, media_row, creator_ids, studio_id,
+                 resolver, tags, tag_matcher, kind, creator_roles, creator_name):
     username = profile["username"]
     post_id = media_row["post_id"]
     filename = media_row["filename"]
@@ -210,17 +237,31 @@ def build_update(db, processor, profile, media_row, performer_ids, studio_id,
     meta = db.post_meta(post_id)
     text = meta["text"] if (meta and meta["text"]) else ""
 
-    performer_ids = list(performer_ids)
+    mention_ids = []
     if text:
         for mention in processor.parse_mentions(text):
             for pid in resolver.resolve(mention, from_mention=True):
-                if pid not in performer_ids:
-                    performer_ids.append(pid)
+                if pid not in mention_ids:
+                    mention_ids.append(pid)
         title, details = processor.process_text(text)
     else:
         api_type = media_row["api_type"]
         title = "{}: {}".format(api_type, date) if api_type else date
         details = ""
+
+    # A creator tagged as crew (director/photographer) is credited in the
+    # director/photographer field rather than the performers list. They are only
+    # added as a performer when the post @mentions nobody, so the media is never
+    # left performer-less.
+    if creator_roles:
+        performer_ids = list(mention_ids)
+        if not performer_ids:
+            performer_ids = list(creator_ids)
+    else:
+        performer_ids = list(creator_ids)
+        for pid in mention_ids:
+            if pid not in performer_ids:
+                performer_ids.append(pid)
 
     tag_ids = collect_tag_ids(processor, meta, text, tags, tag_matcher)
 
@@ -234,6 +275,13 @@ def build_update(db, processor, profile, media_row, performer_ids, studio_id,
         "tag_ids": tag_ids,
         "organized": True,
     }
+    # director exists only on scenes, photographer only on images (verified
+    # against the Stash schema), so credit each on the media type that has it.
+    if creator_name and creator_roles:
+        if kind == "scene" and "director" in creator_roles:
+            update["director"] = creator_name
+        elif kind == "image" and "photographer" in creator_roles:
+            update["photographer"] = creator_name
     # Real posts have a numeric OF post id; profile/avatar/header assets use a
     # hash and would produce a junk URL, so only set the URL for numeric ids.
     if str(post_id).isdigit():
@@ -252,6 +300,7 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
 
     studio_id = None
     performer_ids = []
+    creator_roles, creator_name = set(), None
     if not tag_only:
         studio_id = studios.resolve(username)
         if not studio_id:
@@ -271,6 +320,15 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
                 "(enable Allow Multiple Performer Matches to attach all)".format(username)
             )
             return
+
+        creator_roles, creator_name = performers.creator_credit(username)
+        if creator_roles:
+            log.LogInfo(
+                "  '{}' tagged as {}; crediting the {} field(s)".format(
+                    username, "/".join(sorted(creator_roles)),
+                    "/".join(sorted(creator_roles)),
+                )
+            )
 
     # Map each Stash media file's basename to (kind, stash id, existing tag ids).
     # We route the update by where the media actually lives in Stash so the id
@@ -330,7 +388,7 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
         else:
             update, label = build_update(
                 db, processor, profile, media_row, performer_ids, studio_id,
-                performers, tags, tag_matcher,
+                performers, tags, tag_matcher, kind, creator_roles, creator_name,
             )
         update["id"] = stash_id
         try:
@@ -375,6 +433,8 @@ def main():
     auto_create = bool(get_setting(config, "autoCreatePerformers", False))
     auto_tag_from_text = bool(get_setting(config, "autoTagFromText", False))
     skip_multi_file = bool(get_setting(config, "skipMultiFile", False))
+    director_tag = get_setting(config, "directorTag", DEFAULT_DIRECTOR_TAG)
+    photographer_tag = get_setting(config, "photographerTag", DEFAULT_PHOTOGRAPHER_TAG)
 
     if not data_path:
         log.LogError(
@@ -409,7 +469,7 @@ def main():
 
     processor = MediaProcessor(max_title_length)
     studios = StudioResolver(client, parent_studio_id, load_icon(server))
-    performers = PerformerResolver(client, auto_create)
+    performers = PerformerResolver(client, auto_create, director_tag, photographer_tag)
     tags = TagResolver(client)
     # The tag-only task always matches tags from text; the regular sync only
     # does so when the setting is enabled.
