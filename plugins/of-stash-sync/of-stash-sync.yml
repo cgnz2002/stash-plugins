@@ -1,6 +1,6 @@
 name: OnlyFans Metadata Sync
 description: Sync OF-Scraper metadata (title, details, date, URL, performers, studio) from user_data.db files into matching Stash scenes and images.
-version: 1.5.1
+version: 1.6.0
 url: https://github.com/cgnz2002/stash-plugins
 
 settings:
@@ -32,9 +32,9 @@ settings:
     displayName: Skip Multi-file Scenes and Images
     description: "When on, the Sync and Full Sync tasks skip any scene or image that has more than one file (typically merged scenes from multiple OF pages), to avoid overwriting their performers and metadata. Does not affect the Tag task. Default off."
     type: BOOLEAN
-  crewTag:
-    displayName: Crew Tag Name
-    description: "Any performer with this tag -- the creator or an @mentioned collaborator -- is treated as crew: their name goes in each scene's Director field and each image's Photographer field instead of the performers list. The studio still follows the media's source. If a post's only credits are crew, the creator is added as a performer so nothing is left empty. Default: OnlyFans Crew"
+  crewTagId:
+    displayName: Crew Tag ID
+    description: "The Stash tag ID that marks crew performers (directors/photographers). Find it in the tag's page URL, e.g. .../tags/42 means the ID is 42. Any performer with this tag -- the creator or an @mentioned collaborator -- is credited in each scene's Director field and each image's Photographer field instead of the performers list; the studio still follows the media's source, and if a post's only credits are crew the creator is added as a performer so nothing is left empty. Leave empty to disable crew handling."
     type: STRING
 
 exec:

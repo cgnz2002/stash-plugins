@@ -91,8 +91,9 @@ The four tasks are defined in the manifest and selected by `args.mode`:
   `TagTextMatcher` each cache lookups and create-if-missing where appropriate.
   Updates are routed by where the media actually lives in Stash
   (scene -> `sceneUpdate`, image -> `imageUpdate`).
-- **Crew credit** — a performer carrying the configurable *Crew Tag* (default
-  `OnlyFans Crew`) is treated as crew: `collect_crew` credits them in the scene
+- **Crew credit** — a performer carrying the configured *Crew Tag* (matched by
+  **tag id**, not name, so renames don't break it) is treated as crew:
+  `collect_crew` credits them in the scene
   `director` / image `photographer` field instead of the performers list, for
   both the creator and any @mentioned collaborator. The creator is still added
   as a performer when a post credits only crew (so media is never

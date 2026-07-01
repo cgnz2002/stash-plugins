@@ -101,7 +101,7 @@ class StashClient:
         query = """
         query FindPerformers($f: PerformerFilterType!) {
             findPerformers(performer_filter: $f, filter: { per_page: -1 }) {
-                performers { id name alias_list tags { name } }
+                performers { id name alias_list tags { id } }
             }
         }
         """

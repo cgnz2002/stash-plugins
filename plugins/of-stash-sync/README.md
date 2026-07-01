@@ -56,7 +56,7 @@ Both current and older OF-Scraper database layouts are supported.
 | Create Missing Performers | off | Create a sparse performer for the creator and any unmatched `@mentions` instead of skipping. |
 | Auto-tag From Post Text | off | Scan each post's text and attach any existing Stash tags whose name or alias appears in it. |
 | Skip Multi-file Scenes and Images | off | Sync and Full Sync skip any scene or image with more than one file (e.g. merged scenes), to protect their performers and metadata. Does not affect the Tag task. |
-| Crew Tag Name | `OnlyFans Crew` | A performer with this Stash tag is treated as crew: their name goes in each scene's Director field and each image's Photographer field instead of the performers list. Applies to the creator and any `@mentioned` collaborator. |
+| Crew Tag ID | (empty) | The Stash tag **ID** (from the tag's URL, e.g. `.../tags/42` → `42`) marking crew performers. A performer with this tag has their name put in each scene's Director field and each image's Photographer field instead of the performers list. Applies to the creator and any `@mentioned` collaborator. Empty disables crew handling. |
 
 ## Tasks
 
@@ -84,14 +84,16 @@ sync tasks.
 ### Crew (directors / photographers)
 
 Some creators you follow are directors or photographers rather than the on-screen
-talent. Tag their Stash performer with the *Crew Tag Name* (default
-`OnlyFans Crew`) and the plugin will, on any sync or the **Update Crew** task,
-put their name in the scene **Director** and image **Photographer** fields
+talent. Make a tag for them in Stash (any name), note its ID from the tag page
+URL (e.g. `.../tags/42` → `42`), set that as the *Crew Tag ID*, and apply the
+tag to their performer. On any sync or the **Update Crew** task the plugin then
+puts their name in the scene **Director** and image **Photographer** fields
 instead of adding them as a performer. This applies both to the creator whose
 database is being read and to anyone they `@mention` (e.g. a guest director on a
-performer's own page). The studio always follows where the media was sourced
-from, and if a post credits only crew the creator is still added as a performer
-so the media is never left empty.
+performer's own page). Matching is by tag ID, so you can rename the tag freely.
+The studio always follows where the media was sourced from, and if a post
+credits only crew the creator is still added as a performer so the media is
+never left empty.
 
 ## Notes
 

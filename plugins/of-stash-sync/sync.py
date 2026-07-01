@@ -20,7 +20,6 @@ PLUGIN_ID = "of-stash-sync"
 
 DEFAULT_PARENT_STUDIO = "OnlyFans (network)"
 DEFAULT_MAX_TITLE_LENGTH = 65
-DEFAULT_CREW_TAG = "OnlyFans Crew"
 
 
 def get_setting(config, key, default):
@@ -37,10 +36,12 @@ def of_url(username):
 class PerformerResolver:
     """Find performers by name/alias, optionally creating missing ones."""
 
-    def __init__(self, client, auto_create, crew_tag=""):
+    def __init__(self, client, auto_create, crew_tag_id=""):
         self.client = client
         self.auto_create = auto_create
-        self.crew_tag = (crew_tag or "").strip().lower()
+        # Matched by tag id (stable) rather than name, so renaming the tag in
+        # Stash doesn't silently disable crew handling. Empty disables it.
+        self.crew_tag_id = str(crew_tag_id or "").strip()
         self.cache = {}
         # username -> {"roles": set(), "name": str} for the crew-credit logic
         self.info_cache = {}
@@ -67,8 +68,8 @@ class PerformerResolver:
         # record both roles when any matched performer carries the crew tag.
         roles = set()
         for p in exact:
-            ptags = {(t.get("name") or "").lower() for t in (p.get("tags") or [])}
-            if self.crew_tag and self.crew_tag in ptags:
+            ptag_ids = {t.get("id") for t in (p.get("tags") or [])}
+            if self.crew_tag_id and self.crew_tag_id in ptag_ids:
                 roles = {"director", "photographer"}
                 break
         self.info_cache[key] = {"roles": roles, "name": exact[0]["name"] if exact else None}
@@ -524,7 +525,7 @@ def main():
     auto_create = bool(get_setting(config, "autoCreatePerformers", False))
     auto_tag_from_text = bool(get_setting(config, "autoTagFromText", False))
     skip_multi_file = bool(get_setting(config, "skipMultiFile", False))
-    crew_tag = get_setting(config, "crewTag", DEFAULT_CREW_TAG)
+    crew_tag_id = get_setting(config, "crewTagId", "")
 
     if not data_path:
         msg = "No data path configured. Set 'OF-Scraper Data Path' in the plugin settings."
@@ -564,7 +565,7 @@ def main():
     # The crew pass is surgical maintenance: it must never create performers as
     # a side effect of resolving @mentions, even if Create Missing Performers is
     # enabled for the sync tasks.
-    performers = PerformerResolver(client, auto_create and not crew_only, crew_tag)
+    performers = PerformerResolver(client, auto_create and not crew_only, crew_tag_id)
     tags = TagResolver(client)
     # The tag-only task always matches tags from text; the regular sync only
     # does so when the setting is enabled.
