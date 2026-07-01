@@ -20,8 +20,7 @@ PLUGIN_ID = "of-stash-sync"
 
 DEFAULT_PARENT_STUDIO = "OnlyFans (network)"
 DEFAULT_MAX_TITLE_LENGTH = 65
-DEFAULT_DIRECTOR_TAG = "OnlyFans Director"
-DEFAULT_PHOTOGRAPHER_TAG = "OnlyFans Photographer"
+DEFAULT_CREW_TAG = "OnlyFans Crew"
 
 
 def get_setting(config, key, default):
@@ -38,19 +37,18 @@ def of_url(username):
 class PerformerResolver:
     """Find performers by name/alias, optionally creating missing ones."""
 
-    def __init__(self, client, auto_create, director_tag="", photographer_tag=""):
+    def __init__(self, client, auto_create, crew_tag=""):
         self.client = client
         self.auto_create = auto_create
-        self.director_tag = (director_tag or "").strip().lower()
-        self.photographer_tag = (photographer_tag or "").strip().lower()
+        self.crew_tag = (crew_tag or "").strip().lower()
         self.cache = {}
         # username -> {"roles": set(), "name": str} for the crew-credit logic
         self.info_cache = {}
 
     def creator_credit(self, username):
-        """Return (roles, name) for a creator: which crew tags (director/
-        photographer) the matched performer carries, and its display name.
-        resolve() must have been called for the username first.
+        """Return (roles, name) for a creator: its crew roles (empty, or both
+        'director' and 'photographer' when the matched performer carries the crew
+        tag) and its display name. resolve() must have been called first.
         """
         info = self.info_cache.get(username.lower())
         if not info:
@@ -64,15 +62,15 @@ class PerformerResolver:
         result = self.client.find_performers_by_name(username)
         exact = result["exact"]
         ids = [p["id"] for p in exact]
-        # Record crew roles + display name so a director/photographer creator can
-        # be credited in the director/photographer field instead of as a performer.
+        # A single crew tag credits the performer to both the scene director and
+        # the image photographer field (each applies on its own media type), so
+        # record both roles when any matched performer carries the crew tag.
         roles = set()
         for p in exact:
             ptags = {(t.get("name") or "").lower() for t in (p.get("tags") or [])}
-            if self.director_tag and self.director_tag in ptags:
-                roles.add("director")
-            if self.photographer_tag and self.photographer_tag in ptags:
-                roles.add("photographer")
+            if self.crew_tag and self.crew_tag in ptags:
+                roles = {"director", "photographer"}
+                break
         self.info_cache[key] = {"roles": roles, "name": exact[0]["name"] if exact else None}
         if not ids and self.auto_create:
             # Stash treats EQUALS as a SQL LIKE, so a username containing '_'
@@ -395,9 +393,7 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
 
         creator_roles, creator_name = performers.creator_credit(username)
         if creator_roles:
-            log.LogInfo(
-                "  '{}' tagged as {}".format(username, "/".join(sorted(creator_roles)))
-            )
+            log.LogInfo("  '{}' tagged as crew".format(username))
 
         if not crew_only:
             studio_id = studios.resolve(username)
@@ -527,8 +523,7 @@ def main():
     auto_create = bool(get_setting(config, "autoCreatePerformers", False))
     auto_tag_from_text = bool(get_setting(config, "autoTagFromText", False))
     skip_multi_file = bool(get_setting(config, "skipMultiFile", False))
-    director_tag = get_setting(config, "directorTag", DEFAULT_DIRECTOR_TAG)
-    photographer_tag = get_setting(config, "photographerTag", DEFAULT_PHOTOGRAPHER_TAG)
+    crew_tag = get_setting(config, "crewTag", DEFAULT_CREW_TAG)
 
     if not data_path:
         log.LogError(
@@ -565,7 +560,7 @@ def main():
 
     processor = MediaProcessor(max_title_length)
     studios = StudioResolver(client, parent_studio_id, load_icon(server))
-    performers = PerformerResolver(client, auto_create, director_tag, photographer_tag)
+    performers = PerformerResolver(client, auto_create, crew_tag)
     tags = TagResolver(client)
     # The tag-only task always matches tags from text; the regular sync only
     # does so when the setting is enabled.
