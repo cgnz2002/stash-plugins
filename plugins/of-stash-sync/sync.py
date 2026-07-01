@@ -65,14 +65,20 @@ class PerformerResolver:
         ids = [p["id"] for p in exact]
         # A single crew tag credits the performer to both the scene director and
         # the image photographer field (each applies on its own media type), so
-        # record both roles when any matched performer carries the crew tag.
+        # record both roles when any matched performer carries the crew tag. The
+        # credit uses the performer's display name (never the alias/username);
+        # when several performers match, prefer the crew-tagged one's name.
         roles = set()
+        credit_name = None
         for p in exact:
             ptag_ids = {t.get("id") for t in (p.get("tags") or [])}
             if self.crew_tag_id and self.crew_tag_id in ptag_ids:
                 roles = {"director", "photographer"}
+                credit_name = p.get("name")
                 break
-        self.info_cache[key] = {"roles": roles, "name": exact[0]["name"] if exact else None}
+        if credit_name is None and exact:
+            credit_name = exact[0]["name"]
+        self.info_cache[key] = {"roles": roles, "name": credit_name}
         if not ids and self.auto_create:
             # Stash treats EQUALS as a SQL LIKE, so a username containing '_'
             # (a wildcard) can collide with an existing performer name on
