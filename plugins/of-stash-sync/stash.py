@@ -183,7 +183,7 @@ class StashClient:
         query = """
         query FindScenes($f: SceneFilterType!) {
             findScenes(scene_filter: $f, filter: { per_page: -1 }) {
-                scenes { id tags { id } files { path basename } }
+                scenes { id tags { id } performers { id } director files { path basename } }
             }
         }
         """
@@ -199,6 +199,8 @@ class StashClient:
                 images {
                     id
                     tags { id }
+                    performers { id }
+                    photographer
                     visual_files {
                         ... on VideoFile { path basename }
                         ... on ImageFile { path basename }

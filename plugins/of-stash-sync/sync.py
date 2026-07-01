@@ -227,6 +227,86 @@ def build_tag_only_update(db, processor, media_row, tags, tag_matcher,
     return {"tag_ids": merged}, added
 
 
+def collect_crew(processor, resolver, text, creator_roles, creator_name, creator_ids):
+    """Split a post's credited people into crew and plain performers.
+
+    Anyone tagged as crew (director/photographer) -- the creator or an @mentioned
+    collaborator -- belongs in the director/photographer field, not the
+    performers list. Returns (director_names, photographer_names, crew_ids,
+    mention_performer_ids), where crew_ids are the performer ids to keep out of
+    the performers list and mention_performer_ids are the non-crew @mentions.
+    """
+    crew = []          # (roles, display name)
+    crew_ids = set()
+    if creator_roles and creator_name:
+        crew.append((creator_roles, creator_name))
+        crew_ids.update(creator_ids)
+
+    mention_performer_ids = []
+    if text:
+        for mention in processor.parse_mentions(text):
+            ids = resolver.resolve(mention, from_mention=True)
+            m_roles, m_name = resolver.creator_credit(mention)
+            if m_roles:
+                if m_name:
+                    crew.append((m_roles, m_name))
+                crew_ids.update(ids)
+            else:
+                for pid in ids:
+                    if pid not in mention_performer_ids:
+                        mention_performer_ids.append(pid)
+
+    director_names, photographer_names = [], []
+    for roles, name in crew:
+        if "director" in roles and name not in director_names:
+            director_names.append(name)
+        if "photographer" in roles and name not in photographer_names:
+            photographer_names.append(name)
+    return director_names, photographer_names, crew_ids, mention_performer_ids
+
+
+def build_crew_only_update(db, processor, media_row, creator_ids, creator_roles,
+                           creator_name, resolver, kind, existing_performer_ids,
+                           existing_credit):
+    """Return an update that only fixes the crew credit: move director/
+    photographer-tagged people out of the existing performers list and into the
+    director/photographer field. Leaves title, details, date, studio, tags and
+    organized untouched. Returns (None, None) when nothing needs to change.
+    """
+    meta = db.post_meta(media_row["post_id"])
+    text = meta["text"] if (meta and meta["text"]) else ""
+    director_names, photographer_names, crew_ids, _ = collect_crew(
+        processor, resolver, text, creator_roles, creator_name, creator_ids
+    )
+
+    # Prune credited crew from the existing performers; never leave it empty.
+    new_perf = [pid for pid in existing_performer_ids if pid not in crew_ids]
+    if not new_perf:
+        new_perf = list(creator_ids)
+
+    credit = None
+    if kind == "scene" and director_names:
+        credit = ", ".join(director_names)
+    elif kind == "image" and photographer_names:
+        credit = ", ".join(photographer_names)
+
+    perf_changed = new_perf != list(existing_performer_ids)
+    credit_changed = credit is not None and credit != (existing_credit or "")
+    if not perf_changed and not credit_changed:
+        return None, None
+
+    update = {}
+    parts = []
+    if perf_changed:
+        update["performer_ids"] = new_perf
+        parts.append("performers {}->{}".format(len(existing_performer_ids), len(new_perf)))
+    if credit_changed:
+        field = "director" if kind == "scene" else "photographer"
+        update[field] = credit
+        parts.append("{}={}".format(field, credit))
+    return update, ", ".join(parts)
+
+
 def build_update(db, processor, profile, media_row, creator_ids, studio_id,
                  resolver, tags, tag_matcher, kind, creator_roles, creator_name):
     username = profile["username"]
@@ -237,38 +317,16 @@ def build_update(db, processor, profile, media_row, creator_ids, studio_id,
     meta = db.post_meta(post_id)
     text = meta["text"] if (meta and meta["text"]) else ""
 
-    # Anyone tagged as crew (director/photographer) -- the creator or an
-    # @mentioned collaborator -- is credited in the director/photographer field
-    # rather than the performers list.
-    crew = []  # (roles, display name)
-    if creator_roles and creator_name:
-        crew.append((creator_roles, creator_name))
+    director_names, photographer_names, _crew_ids, mention_performer_ids = collect_crew(
+        processor, resolver, text, creator_roles, creator_name, creator_ids
+    )
 
-    mention_performer_ids = []
     if text:
-        for mention in processor.parse_mentions(text):
-            ids = resolver.resolve(mention, from_mention=True)
-            m_roles, m_name = resolver.creator_credit(mention)
-            if m_roles:
-                if m_name:
-                    crew.append((m_roles, m_name))
-            else:
-                for pid in ids:
-                    if pid not in mention_performer_ids:
-                        mention_performer_ids.append(pid)
         title, details = processor.process_text(text)
     else:
         api_type = media_row["api_type"]
         title = "{}: {}".format(api_type, date) if api_type else date
         details = ""
-
-    director_names = []
-    photographer_names = []
-    for roles, name in crew:
-        if "director" in roles and name not in director_names:
-            director_names.append(name)
-        if "photographer" in roles and name not in photographer_names:
-            photographer_names.append(name)
 
     # Build the performer list: the creator (unless they are crew) plus any
     # @mentioned performers who aren't crew. If everyone credited turned out to
@@ -308,8 +366,8 @@ def build_update(db, processor, profile, media_row, creator_ids, studio_id,
 
 
 def process_profile(client, db, profile, processor, studios, performers, tags,
-                    tag_matcher, full_sync, tag_only, multiple_ok, skip_multi_file,
-                    totals):
+                    tag_matcher, full_sync, tag_only, crew_only, multiple_ok,
+                    skip_multi_file, totals):
     user_id = profile["user_id"]
     username = profile["username"]
     log.LogInfo("Processing {} (user_id {})".format(username, user_id))
@@ -317,12 +375,10 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
     studio_id = None
     performer_ids = []
     creator_roles, creator_name = set(), None
+    # The tag-only pass needs neither the creator performer nor the studio. The
+    # crew pass needs the creator performer (for role/name and the fallback) but
+    # not the studio; the sync passes need both.
     if not tag_only:
-        studio_id = studios.resolve(username)
-        if not studio_id:
-            log.LogError("Could not resolve studio for {}; skipping".format(username))
-            return
-
         performer_ids = performers.resolve(username)
         if not performer_ids:
             log.LogWarning(
@@ -340,11 +396,14 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
         creator_roles, creator_name = performers.creator_credit(username)
         if creator_roles:
             log.LogInfo(
-                "  '{}' tagged as {}; crediting the {} field(s)".format(
-                    username, "/".join(sorted(creator_roles)),
-                    "/".join(sorted(creator_roles)),
-                )
+                "  '{}' tagged as {}".format(username, "/".join(sorted(creator_roles)))
             )
+
+        if not crew_only:
+            studio_id = studios.resolve(username)
+            if not studio_id:
+                log.LogError("Could not resolve studio for {}; skipping".format(username))
+                return
 
     # Map each Stash media file's basename to (kind, stash id, existing tag ids).
     # We route the update by where the media actually lives in Stash so the id
@@ -355,7 +414,7 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
     # only applies to the destructive sync tasks, not the additive tag pass.
     skip_multi = skip_multi_file and not tag_only
 
-    include_all = full_sync or tag_only
+    include_all = full_sync or tag_only or crew_only
     media_map = {}
     skipped_multi = 0
     scenes = client.find_scenes(username, include_all)
@@ -364,20 +423,30 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
         if skip_multi and len(files) > 1:
             skipped_multi += 1
             continue
-        existing = [t["id"] for t in scene.get("tags") or []]
+        entry = (
+            "scene", scene["id"],
+            [t["id"] for t in scene.get("tags") or []],
+            [p["id"] for p in scene.get("performers") or []],
+            scene.get("director"),
+        )
         for f in files:
-            media_map[os.path.basename(f["path"])] = ("scene", scene["id"], existing)
+            media_map[os.path.basename(f["path"])] = entry
     images = client.find_images(username, include_all)
     for image in images:
         visual_files = image.get("visual_files") or []
         if skip_multi and len(visual_files) > 1:
             skipped_multi += 1
             continue
-        existing = [t["id"] for t in image.get("tags") or []]
+        entry = (
+            "image", image["id"],
+            [t["id"] for t in image.get("tags") or []],
+            [p["id"] for p in image.get("performers") or []],
+            image.get("photographer"),
+        )
         for vf in visual_files:
             basename = vf.get("basename")
             if basename:
-                media_map[basename] = ("image", image["id"], existing)
+                media_map[basename] = entry
     log.LogInfo(
         "  {} scenes, {} images to consider".format(len(scenes), len(images))
     )
@@ -387,7 +456,7 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
             "  Skipped {} multi-file scene(s)/image(s)".format(skipped_multi)
         )
 
-    for basename, (kind, stash_id, existing_tags) in media_map.items():
+    for basename, (kind, stash_id, existing_tags, existing_perf, existing_credit) in media_map.items():
         media_row = db.media_by_filename(user_id, basename)
         if not media_row:
             totals["skipped"] += 1
@@ -401,6 +470,14 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
                 totals["skipped"] += 1
                 continue
             label = "+{} tags".format(added)
+        elif crew_only:
+            update, label = build_crew_only_update(
+                db, processor, media_row, performer_ids, creator_roles,
+                creator_name, performers, kind, existing_perf, existing_credit,
+            )
+            if update is None:
+                totals["skipped"] += 1
+                continue
         else:
             update, label = build_update(
                 db, processor, profile, media_row, performer_ids, studio_id,
@@ -431,6 +508,7 @@ def main():
     mode = args.get("mode")
     full_sync = mode == "full"
     tag_only = mode == "tag"
+    crew_only = mode == "crew"
 
     client = StashClient(server)
     try:
@@ -460,6 +538,8 @@ def main():
 
     if tag_only:
         log.LogInfo("Starting OnlyFans tag-only pass. Data path: {}".format(data_path))
+    elif crew_only:
+        log.LogInfo("Starting OnlyFans crew-credit pass. Data path: {}".format(data_path))
     else:
         log.LogInfo(
             "Starting OnlyFans {}metadata sync. Data path: {}".format(
@@ -468,7 +548,7 @@ def main():
         )
 
     parent_studio_id = None
-    if not tag_only:
+    if not tag_only and not crew_only:
         parent_studio_id = client.find_studio(parent_studio_name)
         if not parent_studio_id:
             log.LogError(
@@ -511,8 +591,8 @@ def main():
             for profile in profiles:
                 process_profile(
                     client, db, profile, processor, studios, performers, tags,
-                    tag_matcher, full_sync, tag_only, multiple_ok, skip_multi_file,
-                    totals,
+                    tag_matcher, full_sync, tag_only, crew_only, multiple_ok,
+                    skip_multi_file, totals,
                 )
         except Exception as e:
             log.LogError("Error processing {}: {}".format(db_path, e))
@@ -520,7 +600,7 @@ def main():
             db.close()
 
     log.LogProgress(1.0)
-    verb = "Tagging" if tag_only else "Sync"
+    verb = "Tagging" if tag_only else ("Crew update" if crew_only else "Sync")
     summary = "{} complete. Scenes updated: {}, Images updated: {}, Skipped: {}".format(
         verb, totals["scenes"], totals["images"], totals["skipped"]
     )
