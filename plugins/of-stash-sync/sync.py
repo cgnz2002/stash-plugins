@@ -237,31 +237,48 @@ def build_update(db, processor, profile, media_row, creator_ids, studio_id,
     meta = db.post_meta(post_id)
     text = meta["text"] if (meta and meta["text"]) else ""
 
-    mention_ids = []
+    # Anyone tagged as crew (director/photographer) -- the creator or an
+    # @mentioned collaborator -- is credited in the director/photographer field
+    # rather than the performers list.
+    crew = []  # (roles, display name)
+    if creator_roles and creator_name:
+        crew.append((creator_roles, creator_name))
+
+    mention_performer_ids = []
     if text:
         for mention in processor.parse_mentions(text):
-            for pid in resolver.resolve(mention, from_mention=True):
-                if pid not in mention_ids:
-                    mention_ids.append(pid)
+            ids = resolver.resolve(mention, from_mention=True)
+            m_roles, m_name = resolver.creator_credit(mention)
+            if m_roles:
+                if m_name:
+                    crew.append((m_roles, m_name))
+            else:
+                for pid in ids:
+                    if pid not in mention_performer_ids:
+                        mention_performer_ids.append(pid)
         title, details = processor.process_text(text)
     else:
         api_type = media_row["api_type"]
         title = "{}: {}".format(api_type, date) if api_type else date
         details = ""
 
-    # A creator tagged as crew (director/photographer) is credited in the
-    # director/photographer field rather than the performers list. They are only
-    # added as a performer when the post @mentions nobody, so the media is never
-    # left performer-less.
-    if creator_roles:
-        performer_ids = list(mention_ids)
-        if not performer_ids:
-            performer_ids = list(creator_ids)
-    else:
+    director_names = []
+    photographer_names = []
+    for roles, name in crew:
+        if "director" in roles and name not in director_names:
+            director_names.append(name)
+        if "photographer" in roles and name not in photographer_names:
+            photographer_names.append(name)
+
+    # Build the performer list: the creator (unless they are crew) plus any
+    # @mentioned performers who aren't crew. If everyone credited turned out to
+    # be crew, fall back to the creator so the media is never performer-less.
+    performer_ids = [] if creator_roles else list(creator_ids)
+    for pid in mention_performer_ids:
+        if pid not in performer_ids:
+            performer_ids.append(pid)
+    if not performer_ids:
         performer_ids = list(creator_ids)
-        for pid in mention_ids:
-            if pid not in performer_ids:
-                performer_ids.append(pid)
 
     tag_ids = collect_tag_ids(processor, meta, text, tags, tag_matcher)
 
@@ -277,11 +294,10 @@ def build_update(db, processor, profile, media_row, creator_ids, studio_id,
     }
     # director exists only on scenes, photographer only on images (verified
     # against the Stash schema), so credit each on the media type that has it.
-    if creator_name and creator_roles:
-        if kind == "scene" and "director" in creator_roles:
-            update["director"] = creator_name
-        elif kind == "image" and "photographer" in creator_roles:
-            update["photographer"] = creator_name
+    if kind == "scene" and director_names:
+        update["director"] = ", ".join(director_names)
+    elif kind == "image" and photographer_names:
+        update["photographer"] = ", ".join(photographer_names)
     # Real posts have a numeric OF post id; profile/avatar/header assets use a
     # hash and would produce a junk URL, so only set the URL for numeric ids.
     if str(post_id).isdigit():

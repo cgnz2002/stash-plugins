@@ -1,6 +1,6 @@
 name: OnlyFans Metadata Sync
 description: Sync OF-Scraper metadata (title, details, date, URL, performers, studio) from user_data.db files into matching Stash scenes and images.
-version: 1.2.0
+version: 1.3.0
 url: https://github.com/cgnz2002/stash-plugins
 
 settings:
@@ -34,11 +34,11 @@ settings:
     type: BOOLEAN
   directorTag:
     displayName: Director Tag Name
-    description: "A creator whose Stash performer has this tag is treated as crew: their name goes in each scene's Director field instead of the performers list. They are added as a performer only when a post @mentions nobody. Default: OnlyFans Director"
+    description: "Any performer with this tag -- the creator or an @mentioned collaborator -- is treated as crew: their name goes in each scene's Director field instead of the performers list. The studio still follows the media's source. If a post's only credits are crew, the creator is added as a performer so nothing is left empty. Default: OnlyFans Director"
     type: STRING
   photographerTag:
     displayName: Photographer Tag Name
-    description: "A creator whose Stash performer has this tag is treated as crew: their name goes in each image's Photographer field instead of the performers list. They are added as a performer only when a post @mentions nobody. Default: OnlyFans Photographer"
+    description: "Any performer with this tag -- the creator or an @mentioned collaborator -- is treated as crew: their name goes in each image's Photographer field instead of the performers list. The studio still follows the media's source. If a post's only credits are crew, the creator is added as a performer so nothing is left empty. Default: OnlyFans Photographer"
     type: STRING
 
 exec:
