@@ -1,6 +1,6 @@
 name: Patreon Metadata Sync
 description: Sync Patreon post metadata (title, description, date, URL, studio, creator performer) onto matching Stash galleries and the images inside them, reading patreon-dl's on-disk post_info files directly, and build a gallery per Patreon collection.
-version: 3.0.0
+version: 3.1.0
 url: https://github.com/cgnz2002/stash-plugins
 
 settings:

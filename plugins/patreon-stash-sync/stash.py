@@ -52,7 +52,9 @@ class StashClient:
         if self.session:
             req.add_header("Cookie", "session={}".format(self.session))
         try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
+            # Generous timeout: the two bulk gallery/image fetches can scan a
+            # large library once each.
+            with urllib.request.urlopen(req, timeout=600) as resp:
                 body = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             detail = e.read().decode("utf-8", "ignore")
@@ -318,6 +320,7 @@ class StashClient:
             findImages(image_filter: $f, filter: { per_page: -1 }) {
                 images {
                     id
+                    organized
                     tags { id }
                     performers { id }
                     photographer

@@ -25,6 +25,7 @@ and performer are created if they don't already exist.
 import base64
 import json
 import os
+import re
 import sys
 
 import log
@@ -36,6 +37,11 @@ from media import MediaProcessor, compile_name_pattern
 PLUGIN_ID = "patreon-stash-sync"
 
 DEFAULT_PARENT_STUDIO = "Patreon (network)"
+
+# The post id embedded in a Stash gallery/image path, e.g.
+# '/data/patreon/<creator>/posts/51162093 - Sokka.../images/1.jpg'.
+_POST_ID_IN_PATH = re.compile(r"[\\/]posts[\\/](\d+)")
+_POST_ID_SEGMENT = re.compile(r"^(\d+)\s*-\s")
 
 
 def get_setting(config, key, default):
@@ -183,8 +189,40 @@ def image_paths(image):
     return [vf.get("path") for vf in (image.get("visual_files") or []) if vf.get("path")]
 
 
-def path_contains(paths, needle):
-    return any(needle in p for p in paths if p)
+def post_id_from_paths(paths):
+    """The Patreon post id a gallery/image belongs to, from its file/folder path.
+    Prefers the '/posts/<id>' segment, falling back to a leading '<id> - ' folder
+    name, so galleries/images can be indexed by post id in one pass."""
+    for p in paths:
+        if not p:
+            continue
+        norm = p.replace("\\", "/")
+        m = _POST_ID_IN_PATH.search(norm)
+        if m:
+            return m.group(1)
+        for seg in norm.split("/"):
+            m = _POST_ID_SEGMENT.match(seg)
+            if m:
+                return m.group(1)
+    return None
+
+
+def build_indexes(client, path_filter):
+    """Fetch every Patreon gallery and image under the data path ONCE and index
+    them by post id. This replaces per-post queries (two per post), which do not
+    scale to hundreds of posts on a large library."""
+    gal_by_id, img_by_id = {}, {}
+    galleries = client.find_galleries(path_filter, True)
+    for g in galleries:
+        pid = post_id_from_paths(gallery_paths(g))
+        if pid:
+            gal_by_id.setdefault(pid, []).append(g)
+    images = client.find_images(path_filter, True)
+    for i in images:
+        pid = post_id_from_paths(image_paths(i))
+        if pid:
+            img_by_id.setdefault(pid, []).append(i)
+    return gal_by_id, img_by_id, len(galleries), len(images)
 
 
 def merged_tag_ids(existing, new):
@@ -216,16 +254,12 @@ def build_meta(processor, post, studio_id, performer_ids):
 # Per-post / per-collection sync
 # --------------------------------------------------------------------------- #
 
-def sync_post(client, post, processor, studios, performers, tags, tag_matcher, mode, totals):
-    include_all = mode in ("full", "tag")
-    basename = os.path.basename((post["directory"] or "").rstrip("/\\"))
-    if not basename:
-        return
-
-    galleries = [g for g in client.find_galleries(basename, include_all)
-                 if path_contains(gallery_paths(g), basename)]
-    images = [i for i in client.find_images(basename, include_all)
-              if path_contains(image_paths(i), basename)]
+def sync_post(client, post, galleries, images, processor, studios, performers,
+              tags, tag_matcher, mode, totals):
+    # The plain 'sync' pass only touches unorganized media; full/tag see all.
+    if mode == "sync":
+        galleries = [g for g in galleries if not g.get("organized")]
+        images = [i for i in images if not i.get("organized")]
     if not galleries and not images:
         return
     totals["matched"] += len(galleries) + len(images)
@@ -281,7 +315,7 @@ def _apply_tag_only(client, galleries, images, new_tags, totals):
             log.LogError("  Failed to tag {} {}: {}".format(kind, record["id"], e))
 
 
-def sync_collection(client, source, coll, processor, studios, performers, totals):
+def sync_collection(client, coll, img_by_id, processor, studios, performers, totals):
     title = coll["title"] or "Collection {}".format(coll["collection_id"])
     studio_id = studios.resolve(coll["vanity"])
     performer_ids = performers.resolve(coll["vanity"])
@@ -314,12 +348,8 @@ def sync_collection(client, source, coll, processor, studios, performers, totals
     # Attach every member post's images (images can belong to several galleries).
     image_ids = []
     for pid in coll["post_ids"]:
-        directory = source.directory_for_post(pid)
-        if not directory:
-            continue
-        basename = os.path.basename(directory.rstrip("/\\"))
-        for image in client.find_images(basename, True):
-            if path_contains(image_paths(image), basename) and image["id"] not in image_ids:
+        for image in img_by_id.get(pid, []):
+            if image["id"] not in image_ids:
                 image_ids.append(image["id"])
     if image_ids:
         try:
@@ -408,12 +438,27 @@ def main():
 
     totals = {"galleries": 0, "images": 0, "collections": 0, "matched": 0, "skipped": 0}
 
+    # Fetch all Patreon galleries/images ONCE and index them by post id, rather
+    # than querying Stash twice per post (which does not scale to hundreds of
+    # posts on a large library).
+    log.LogInfo("Loading Stash galleries and images under {} ...".format(data_path))
+    try:
+        gal_by_id, img_by_id, gal_count, img_count = build_indexes(client, data_path.rstrip("/\\"))
+    except RuntimeError as e:
+        msg = "Could not load galleries/images from Stash: {}".format(e)
+        log.LogError(msg)
+        return msg
+    log.LogInfo("Indexed {} galleries and {} images across {} posts".format(
+        gal_count, img_count, len(gal_by_id)))
+
     for index, post in enumerate(posts):
         log.LogProgress(index / len(posts))
+        pid = post["post_id"]
         try:
-            sync_post(client, post, processor, studios, performers, tags, tag_matcher, mode, totals)
+            sync_post(client, post, gal_by_id.get(pid, []), img_by_id.get(pid, []),
+                      processor, studios, performers, tags, tag_matcher, mode, totals)
         except Exception as e:
-            log.LogError("Error on post {}: {}".format(post.get("post_id"), e))
+            log.LogError("Error on post {}: {}".format(pid, e))
 
     if not tag_only and sync_collections:
         collections = list(source.iter_collections())
@@ -421,7 +466,7 @@ def main():
             log.LogInfo("Found {} collection(s)".format(len(collections)))
         for coll in collections:
             try:
-                sync_collection(client, source, coll, processor, studios, performers, totals)
+                sync_collection(client, coll, img_by_id, processor, studios, performers, totals)
             except Exception as e:
                 log.LogError("Error on collection {}: {}".format(coll.get("collection_id"), e))
 
