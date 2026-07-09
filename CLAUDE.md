@@ -17,7 +17,7 @@ Published source URL (add this in Stash → Settings → Plugins → Add Source)
 https://cgnz2002.github.io/stash-plugins/main/index.yml
 ```
 
-Currently there is one plugin:
+Currently there are two plugins:
 
 - **`plugins/of-stash-sync/`** — OnlyFans Metadata Sync. Syncs metadata scraped by
   [OF-Scraper](https://github.com/datawhores/OF-Scraper) (read from its
@@ -25,6 +25,17 @@ Currently there is one plugin:
   details, date, URL, performers, studio, code, tags, and the `organized` flag.
   It is a native, dependency-free re-implementation of
   [`timekillerj/ofscraper-stash-sync`](https://github.com/timekillerj/ofscraper-stash-sync).
+- **`plugins/patreon-stash-sync/`** — Patreon Metadata Sync. Syncs metadata for
+  Patreon content downloaded with
+  [patreon-dl](https://github.com/patrickkfkan/patreon-dl). A standalone converter
+  (`convert_patreon_to_db.py`) walks patreon-dl's output — preferring each post's
+  flat `post_info/info.txt` and falling back to `post-api.json` for ids/vanity —
+  into a `user_data.db`. Because Patreon posts are downloaded as folders that
+  Stash ingests as **galleries**, the plugin syncs each post onto its Stash
+  **gallery and the images inside it** (matched by the post folder basename), and
+  creates one gallery per Patreon **collection** with the member posts' images
+  attached. It shares of-stash-sync's Stash client / logging / text handling. See
+  that plugin's README for the pipeline.
 
 ## Repository layout
 
@@ -41,6 +52,15 @@ plugins/
     log.py                           Stash log-viewer logging via stderr
     README.md                        User-facing docs (settings, tasks, install)
     onlyfans.png                     Studio icon
+  patreon-stash-sync/
+    patreon-stash-sync.yml           Plugin manifest (gallery/collection tasks)
+    convert_patreon_to_db.py         patreon-dl output (info.txt/post-api.json) -> user_data.db
+    sync.py                          Orchestration: posts -> galleries + images, collections -> galleries
+    patreon_db.py                    Read-only reader for the post/collection user_data.db
+    stash.py                         Stash GraphQL client (adds gallery ops)
+    media.py, log.py                 Copied from of-stash-sync
+    README.md                        User-facing docs + pipeline diagram
+    patreon.png                      Studio icon
 ```
 
 ## How the plugin runs
