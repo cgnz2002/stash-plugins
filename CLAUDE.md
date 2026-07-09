@@ -25,16 +25,17 @@ Currently there are two plugins:
   details, date, URL, performers, studio, code, tags, and the `organized` flag.
   It is a native, dependency-free re-implementation of
   [`timekillerj/ofscraper-stash-sync`](https://github.com/timekillerj/ofscraper-stash-sync).
-- **`plugins/patreon-stash-sync/`** — Patreon Metadata Sync. A fork of
-  `of-stash-sync` for Patreon content downloaded with
-  [patreon-dl](https://github.com/patrickkfkan/patreon-dl). A standalone
-  converter (`convert_patreon_to_db.py`) walks patreon-dl's on-disk output
-  (parsing each `post_info/post-api.json` and reading the real media basenames
-  from the `images/`, `attachments/`, `audio/` dirs) into an **OF-Scraper-shaped**
-  `user_data.db`; the plugin then reuses of-stash-sync's `of_database.py` reader
-  **verbatim** and only swaps the OnlyFans-specific strings (studio suffix,
-  parent studio, creator/post URLs, icon). See that plugin's README for the
-  pipeline.
+- **`plugins/patreon-stash-sync/`** — Patreon Metadata Sync. Syncs metadata for
+  Patreon content downloaded with
+  [patreon-dl](https://github.com/patrickkfkan/patreon-dl). A standalone converter
+  (`convert_patreon_to_db.py`) walks patreon-dl's output — preferring each post's
+  flat `post_info/info.txt` and falling back to `post-api.json` for ids/vanity —
+  into a `user_data.db`. Because Patreon posts are downloaded as folders that
+  Stash ingests as **galleries**, the plugin syncs each post onto its Stash
+  **gallery and the images inside it** (matched by the post folder basename), and
+  creates one gallery per Patreon **collection** with the member posts' images
+  attached. It shares of-stash-sync's Stash client / logging / text handling. See
+  that plugin's README for the pipeline.
 
 ## Repository layout
 
@@ -52,11 +53,12 @@ plugins/
     README.md                        User-facing docs (settings, tasks, install)
     onlyfans.png                     Studio icon
   patreon-stash-sync/
-    patreon-stash-sync.yml           Plugin manifest (fork of of-stash-sync.yml)
-    convert_patreon_to_db.py         patreon-dl output -> OF-Scraper-shaped user_data.db
-    sync.py                          Fork of of-stash-sync/sync.py (Patreon strings only)
-    stash.py, of_database.py,        Copied verbatim from of-stash-sync
-    media.py, log.py
+    patreon-stash-sync.yml           Plugin manifest (gallery/collection tasks)
+    convert_patreon_to_db.py         patreon-dl output (info.txt/post-api.json) -> user_data.db
+    sync.py                          Orchestration: posts -> galleries + images, collections -> galleries
+    patreon_db.py                    Read-only reader for the post/collection user_data.db
+    stash.py                         Stash GraphQL client (adds gallery ops)
+    media.py, log.py                 Copied from of-stash-sync
     README.md                        User-facing docs + pipeline diagram
     patreon.png                      Studio icon
 ```

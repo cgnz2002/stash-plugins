@@ -1,14 +1,20 @@
 """Entry point for the Patreon Metadata Sync Stash plugin.
 
 Stash runs this as an external 'raw' plugin task: it sends a JSON payload on
-stdin (server connection + task args) and reads task output from stdout. We log
-progress and messages to the Stash log viewer via stderr (see log.py).
+stdin (server connection + task args) and reads task output from stdout. Progress
+and messages go to the Stash log viewer via stderr (see log.py).
 
-This is a fork of of-stash-sync. It reads the very same OF-Scraper-shaped
-``user_data.db`` schema, but that database is produced from patreon-dl output by
-``convert_patreon_to_db.py`` (see the README). Only the OnlyFans-specific
-identifiers (studio suffix, parent studio, creator/post URLs, icon) differ from
-of-stash-sync; the database reader (of_database.py) is intentionally identical.
+Unlike of-stash-sync (which matches OF-Scraper media by filename and syncs
+scenes/images), Patreon posts are downloaded by patreon-dl as folders that Stash
+ingests as **galleries**. So this plugin:
+
+- syncs each Patreon post's metadata onto the matching Stash **gallery** and onto
+  every **image** inside that post folder (matched by the post folder basename,
+  which embeds the numeric post id);
+- creates one Stash gallery per Patreon **collection** and attaches the member
+  posts' images to it.
+
+The database is produced from patreon-dl output by convert_patreon_to_db.py.
 """
 
 import base64
@@ -18,7 +24,7 @@ import sys
 
 import log
 from stash import StashClient
-from of_database import OFDatabase
+from patreon_db import PatreonDatabase
 from media import MediaProcessor, compile_name_pattern
 
 # Plugin id == the manifest filename without extension.
@@ -50,14 +56,9 @@ class PerformerResolver:
         # Stash doesn't silently disable crew handling. Empty disables it.
         self.crew_tag_id = str(crew_tag_id or "").strip()
         self.cache = {}
-        # username -> {"roles": set(), "name": str} for the crew-credit logic
         self.info_cache = {}
 
     def creator_credit(self, username):
-        """Return (roles, name) for a creator: its crew roles (empty, or both
-        'director' and 'photographer' when the matched performer carries the crew
-        tag) and its display name. resolve() must have been called first.
-        """
         info = self.info_cache.get(username.lower())
         if not info:
             return set(), None
@@ -70,34 +71,26 @@ class PerformerResolver:
         result = self.client.find_performers_by_name(username)
         exact = result["exact"]
         ids = [p["id"] for p in exact]
-        # A single crew tag credits the performer to both the scene director and
-        # the image photographer field (each applies on its own media type), so
-        # record both roles when any matched performer carries the crew tag. The
-        # credit uses the performer's display name (never the alias/username);
-        # when several performers match, prefer the crew-tagged one's name.
+        # A performer carrying the crew tag is credited in the photographer field
+        # (galleries/images have no director field), for both the creator and any
+        # @mentioned collaborator. Prefer the crew-tagged performer's display name.
         roles = set()
         credit_name = None
         for p in exact:
             ptag_ids = {t.get("id") for t in (p.get("tags") or [])}
             if self.crew_tag_id and self.crew_tag_id in ptag_ids:
-                roles = {"director", "photographer"}
+                roles = {"photographer"}
                 credit_name = p.get("name")
                 break
         if credit_name is None and exact:
             credit_name = exact[0]["name"]
         self.info_cache[key] = {"roles": roles, "name": credit_name}
         if not ids and self.auto_create:
-            # Stash treats EQUALS as a SQL LIKE, so a username containing '_'
-            # (a wildcard) can collide with an existing performer name on
-            # create. If Stash already has such a near-match, attach it instead
-            # of trying to create a duplicate (which Stash would reject).
             near = result["name_like"]
             if len(near) == 1:
                 ids = [near[0]["id"]]
                 log.LogInfo(
-                    "Matched existing performer '{}' for '{}'".format(
-                        near[0]["name"], username
-                    )
+                    "Matched existing performer '{}' for '{}'".format(near[0]["name"], username)
                 )
             elif len(near) > 1:
                 names = ", ".join("'{}'".format(p["name"]) for p in near)
@@ -162,12 +155,12 @@ class TagResolver:
 
 class TagTextMatcher:
     """Match existing Stash tags against post text, the way Stash's built-in
-    auto-tagger matches names against file paths. Only existing tags are
-    matched (never created), and tags flagged ignore_auto_tag are skipped.
+    auto-tagger matches names against file paths. Only existing tags are matched
+    (never created); tags flagged ignore_auto_tag are skipped.
     """
 
     def __init__(self, client):
-        self.matchers = []  # list of (tag_id, [compiled patterns])
+        self.matchers = []
         for tag in client.find_all_tags():
             if tag.get("ignore_auto_tag"):
                 continue
@@ -197,19 +190,51 @@ def load_icon(server_connection):
     return None
 
 
-def collect_tag_ids(processor, meta, text, tags, tag_matcher):
-    """Tag ids implied by a post: paid/archived plus text matches."""
+# --------------------------------------------------------------------------- #
+# Matching helpers
+# --------------------------------------------------------------------------- #
+
+def gallery_paths(gallery):
+    paths = []
+    folder = gallery.get("folder") or {}
+    if folder.get("path"):
+        paths.append(folder["path"])
+    for f in gallery.get("files") or []:
+        if f.get("path"):
+            paths.append(f["path"])
+    return paths
+
+
+def image_paths(image):
+    return [vf.get("path") for vf in (image.get("visual_files") or []) if vf.get("path")]
+
+
+def path_contains(paths, needle):
+    return any(needle in p for p in paths if p)
+
+
+# --------------------------------------------------------------------------- #
+# Metadata assembly
+# --------------------------------------------------------------------------- #
+
+def post_text(post_row):
+    """Combined title + description, for @mention and tag-from-text matching."""
+    title = post_row["title"] or ""
+    content = post_row["content"] or ""
+    return (title + "\n" + content).strip()
+
+
+def collect_tag_ids(processor, post_row, text, tags, tag_matcher):
     tag_ids = []
-    if meta:
-        price = meta["price"] or 0
-        if meta["paid"] and price and int(price) > 0:
-            tag_id = tags.resolve("paid")
-            if tag_id:
-                tag_ids.append(tag_id)
-        if meta["archived"]:
-            tag_id = tags.resolve("archived")
-            if tag_id:
-                tag_ids.append(tag_id)
+    price = post_row["price"] or 0
+    if post_row["paid"] and price and float(price) > 0:
+        tag_id = tags.resolve("paid")
+        if tag_id:
+            tag_ids.append(tag_id)
+    if post_row["archived"]:
+        tag_id = tags.resolve("archived")
+        if tag_id:
+            tag_ids.append(tag_id)
     if tag_matcher is not None and text:
         for tag_id in tag_matcher.match(processor.remove_html_tags(text)):
             if tag_id not in tag_ids:
@@ -217,41 +242,16 @@ def collect_tag_ids(processor, meta, text, tags, tag_matcher):
     return tag_ids
 
 
-def build_tag_only_update(db, processor, media_row, tags, tag_matcher,
-                          existing_tag_ids):
-    """Return an update that only adds tags, or None if nothing new to add.
+def collect_photographers(processor, resolver, text, creator_roles, creator_name, creator_ids):
+    """Return (photographer_names, crew_ids, mention_performer_ids).
 
-    Leaves every other field untouched (Stash only changes fields that are
-    sent), so manual edits are preserved.
+    Anyone tagged as crew -- the creator or an @mentioned collaborator -- belongs
+    in the gallery/image photographer field, not the performers list.
     """
-    meta = db.post_meta(media_row["post_id"])
-    text = meta["text"] if (meta and meta["text"]) else ""
-    new_tags = collect_tag_ids(processor, meta, text, tags, tag_matcher)
-
-    merged = list(existing_tag_ids)
-    added = 0
-    for tag_id in new_tags:
-        if tag_id not in merged:
-            merged.append(tag_id)
-            added += 1
-    if added == 0:
-        return None, 0
-    return {"tag_ids": merged}, added
-
-
-def collect_crew(processor, resolver, text, creator_roles, creator_name, creator_ids):
-    """Split a post's credited people into crew and plain performers.
-
-    Anyone tagged as crew (director/photographer) -- the creator or an @mentioned
-    collaborator -- belongs in the director/photographer field, not the
-    performers list. Returns (director_names, photographer_names, crew_ids,
-    mention_performer_ids), where crew_ids are the performer ids to keep out of
-    the performers list and mention_performer_ids are the non-crew @mentions.
-    """
-    crew = []          # (roles, display name)
+    photographers = []
     crew_ids = set()
     if creator_roles and creator_name:
-        crew.append((creator_roles, creator_name))
+        photographers.append(creator_name)
         crew_ids.update(creator_ids)
 
     mention_performer_ids = []
@@ -260,252 +260,264 @@ def collect_crew(processor, resolver, text, creator_roles, creator_name, creator
             ids = resolver.resolve(mention, from_mention=True)
             m_roles, m_name = resolver.creator_credit(mention)
             if m_roles:
-                if m_name:
-                    crew.append((m_roles, m_name))
+                if m_name and m_name not in photographers:
+                    photographers.append(m_name)
                 crew_ids.update(ids)
             else:
                 for pid in ids:
                     if pid not in mention_performer_ids:
                         mention_performer_ids.append(pid)
-
-    director_names, photographer_names = [], []
-    for roles, name in crew:
-        if "director" in roles and name not in director_names:
-            director_names.append(name)
-        if "photographer" in roles and name not in photographer_names:
-            photographer_names.append(name)
-    return director_names, photographer_names, crew_ids, mention_performer_ids
+    return photographers, crew_ids, mention_performer_ids
 
 
-def build_crew_only_update(db, processor, media_row, creator_ids, creator_roles,
-                           creator_name, resolver, kind, existing_performer_ids,
-                           existing_credit):
-    """Return an update that only fixes the crew credit: move director/
-    photographer-tagged people out of the existing performers list and into the
-    director/photographer field. Leaves title, details, date, studio, tags and
-    organized untouched. Returns (None, None) when nothing needs to change.
+def build_common_meta(processor, post_row, studio_id, performer_ids, photographers,
+                      max_title_length):
+    """Fields shared by the gallery and its images (everything except tag_ids and
+    the record id). Title is truncated and details are HTML-stripped so no markup
+    reaches Stash even if a DB row still carried some.
     """
-    meta = db.post_meta(media_row["post_id"])
-    text = meta["text"] if (meta and meta["text"]) else ""
-    director_names, photographer_names, crew_ids, _ = collect_crew(
-        processor, resolver, text, creator_roles, creator_name, creator_ids
+    title = post_row["title"] or ""
+    if len(title) > max_title_length:
+        title = processor.truncate_title(title, max_title_length)
+    details = processor.remove_html_tags(post_row["content"] or "")
+    date = processor.format_date(post_row["posted_at"])
+
+    meta = {"title": title, "details": details, "organized": True}
+    if date:
+        meta["date"] = date
+    url = post_row["url"]
+    if url:
+        meta["urls"] = [url]
+    if studio_id:
+        meta["studio_id"] = studio_id
+    if performer_ids:
+        meta["performer_ids"] = performer_ids
+    if photographers:
+        meta["photographer"] = ", ".join(photographers)
+    return meta
+
+
+def merged_tag_ids(existing, new):
+    merged = list(existing)
+    for tag_id in new:
+        if tag_id not in merged:
+            merged.append(tag_id)
+    return merged
+
+
+# --------------------------------------------------------------------------- #
+# Per-post sync
+# --------------------------------------------------------------------------- #
+
+def sync_post(client, db, post_row, username_map, processor, studios, performers,
+              tags, tag_matcher, mode, totals):
+    include_all = mode in ("full", "tag", "crew")
+    directory = post_row["directory"] or ""
+    basename = os.path.basename(directory.rstrip("/\\"))
+    if not basename:
+        return
+
+    galleries = [
+        g for g in client.find_galleries(basename, include_all)
+        if path_contains(gallery_paths(g), basename)
+    ]
+    images = [
+        i for i in client.find_images(basename, include_all)
+        if path_contains(image_paths(i), basename)
+    ]
+    if not galleries and not images:
+        return
+
+    username = username_map.get(post_row["model_id"])
+    text = post_text(post_row)
+
+    studio_id = None
+    creator_ids = []
+    creator_roles, creator_name = set(), None
+    if username and mode not in ("tag",):
+        creator_ids = performers.resolve(username)
+        creator_roles, creator_name = performers.creator_credit(username)
+        if mode not in ("crew",):
+            studio_id = studios.resolve(username)
+
+    if mode == "tag":
+        new_tags = collect_tag_ids(processor, post_row, text, tags, tag_matcher)
+        _apply_tag_only(client, galleries, images, new_tags, totals)
+        return
+
+    photographers, crew_ids, mention_ids = collect_photographers(
+        processor, performers, text, creator_roles, creator_name, creator_ids
     )
 
-    # Prune credited crew from the existing performers; never leave it empty.
-    new_perf = [pid for pid in existing_performer_ids if pid not in crew_ids]
-    if not new_perf:
-        new_perf = list(creator_ids)
+    if mode == "crew":
+        _apply_crew_only(client, galleries, images, photographers, crew_ids,
+                         creator_ids, totals)
+        return
 
-    credit = None
-    if kind == "scene" and director_names:
-        credit = ", ".join(director_names)
-    elif kind == "image" and photographer_names:
-        credit = ", ".join(photographer_names)
-
-    perf_changed = new_perf != list(existing_performer_ids)
-    credit_changed = credit is not None and credit != (existing_credit or "")
-    if not perf_changed and not credit_changed:
-        return None, None
-
-    update = {}
-    parts = []
-    if perf_changed:
-        update["performer_ids"] = new_perf
-        parts.append("performers {}->{}".format(len(existing_performer_ids), len(new_perf)))
-    if credit_changed:
-        field = "director" if kind == "scene" else "photographer"
-        update[field] = credit
-        parts.append("{}={}".format(field, credit))
-    return update, ", ".join(parts)
-
-
-def build_update(db, processor, profile, media_row, creator_ids, studio_id,
-                 resolver, tags, tag_matcher, kind, creator_roles, creator_name):
-    username = profile["username"]
-    post_id = media_row["post_id"]
-    filename = media_row["filename"]
-    date = processor.format_date(media_row["posted_at"])
-
-    meta = db.post_meta(post_id)
-    text = meta["text"] if (meta and meta["text"]) else ""
-
-    director_names, photographer_names, _crew_ids, mention_performer_ids = collect_crew(
-        processor, resolver, text, creator_roles, creator_name, creator_ids
-    )
-
-    if text:
-        title, details = processor.process_text(text)
-    else:
-        api_type = media_row["api_type"]
-        title = "{}: {}".format(api_type, date) if api_type else date
-        details = ""
-
-    # Build the performer list: the creator (unless they are crew) plus any
-    # @mentioned performers who aren't crew. If everyone credited turned out to
-    # be crew, fall back to the creator so the media is never performer-less.
+    # Full / sync: build the performer list (creator unless crew, plus non-crew
+    # @mentions; never leave it empty).
     performer_ids = [] if creator_roles else list(creator_ids)
-    for pid in mention_performer_ids:
+    for pid in mention_ids:
         if pid not in performer_ids:
             performer_ids.append(pid)
     if not performer_ids:
         performer_ids = list(creator_ids)
 
-    tag_ids = collect_tag_ids(processor, meta, text, tags, tag_matcher)
-
-    update = {
-        "title": title,
-        "code": processor.studio_code(filename),
-        "date": date,
-        "studio_id": studio_id,
-        "performer_ids": performer_ids,
-        "details": details,
-        "tag_ids": tag_ids,
-        "organized": True,
-    }
-    # director exists only on scenes, photographer only on images (verified
-    # against the Stash schema), so credit each on the media type that has it.
-    if kind == "scene" and director_names:
-        update["director"] = ", ".join(director_names)
-    elif kind == "image" and photographer_names:
-        update["photographer"] = ", ".join(photographer_names)
-    # Real Patreon posts have a numeric post id; auxiliary assets (cover/avatar)
-    # use a hash and would produce a junk URL, so only set the URL for numeric
-    # ids. The canonical post URL is https://www.patreon.com/posts/<id>.
-    if str(post_id).isdigit():
-        update["urls"] = [
-            "https://www.patreon.com/posts/{}".format(post_id)
-        ]
-    return update, title
-
-
-def process_profile(client, db, profile, processor, studios, performers, tags,
-                    tag_matcher, full_sync, tag_only, crew_only, multiple_ok,
-                    skip_multi_file, totals):
-    user_id = profile["user_id"]
-    username = profile["username"]
-    log.LogInfo("Processing {} (user_id {})".format(username, user_id))
-
-    studio_id = None
-    performer_ids = []
-    creator_roles, creator_name = set(), None
-    # The tag-only pass needs neither the creator performer nor the studio. The
-    # crew pass needs the creator performer (for role/name and the fallback) but
-    # not the studio; the sync passes need both.
-    if not tag_only:
-        performer_ids = performers.resolve(username)
-        if not performer_ids:
-            log.LogWarning(
-                "No performer matches '{}' (enable Create Missing Performers to add "
-                "it); skipping creator".format(username)
-            )
-            return
-        if len(performer_ids) > 1 and not multiple_ok:
-            log.LogWarning(
-                "'{}' matches multiple performers; skipping "
-                "(enable Allow Multiple Performer Matches to attach all)".format(username)
-            )
-            return
-
-        creator_roles, creator_name = performers.creator_credit(username)
-        if creator_roles:
-            log.LogInfo("  '{}' tagged as crew".format(username))
-
-        if not crew_only:
-            studio_id = studios.resolve(username)
-            if not studio_id:
-                log.LogError("Could not resolve studio for {}; skipping".format(username))
-                return
-
-    # Map each Stash media file's basename to (kind, stash id, existing tag ids).
-    # We route the update by where the media actually lives in Stash so the id
-    # always matches the mutation (scenes -> sceneUpdate, images -> imageUpdate).
-    # Tag-only and full passes look at organized media too.
-    # The skip-multi-file guard protects merged scenes (multiple files from
-    # different Patreon posts) from having their performers/metadata overwritten. It
-    # only applies to the destructive sync tasks, not the additive tag pass.
-    skip_multi = skip_multi_file and not tag_only
-
-    include_all = full_sync or tag_only or crew_only
-    media_map = {}
-    skipped_multi = 0
-    scenes = client.find_scenes(username, include_all)
-    for scene in scenes:
-        files = scene.get("files") or []
-        if skip_multi and len(files) > 1:
-            skipped_multi += 1
-            continue
-        entry = (
-            "scene", scene["id"],
-            [t["id"] for t in scene.get("tags") or []],
-            [p["id"] for p in scene.get("performers") or []],
-            scene.get("director"),
-        )
-        for f in files:
-            media_map[os.path.basename(f["path"])] = entry
-    images = client.find_images(username, include_all)
-    for image in images:
-        visual_files = image.get("visual_files") or []
-        if skip_multi and len(visual_files) > 1:
-            skipped_multi += 1
-            continue
-        entry = (
-            "image", image["id"],
-            [t["id"] for t in image.get("tags") or []],
-            [p["id"] for p in image.get("performers") or []],
-            image.get("photographer"),
-        )
-        for vf in visual_files:
-            basename = vf.get("basename")
-            if basename:
-                media_map[basename] = entry
-    log.LogInfo(
-        "  {} scenes, {} images to consider".format(len(scenes), len(images))
+    meta = build_common_meta(
+        processor, post_row, studio_id, performer_ids, photographers, processor.max_title_length
     )
-    if skipped_multi:
-        totals["skipped_multifile"] += skipped_multi
-        log.LogInfo(
-            "  Skipped {} multi-file scene(s)/image(s)".format(skipped_multi)
-        )
+    post_tags = collect_tag_ids(processor, post_row, text, tags, tag_matcher)
 
-    for basename, (kind, stash_id, existing_tags, existing_perf, existing_credit) in media_map.items():
-        media_row = db.media_by_filename(user_id, basename)
-        if not media_row:
+    for gallery in galleries:
+        update = dict(meta)
+        update["id"] = gallery["id"]
+        update["tag_ids"] = merged_tag_ids([t["id"] for t in gallery.get("tags") or []], post_tags)
+        try:
+            client.update_gallery(update)
+            totals["galleries"] += 1
+        except RuntimeError as e:
+            log.LogError("  Failed to update gallery {}: {}".format(gallery["id"], e))
+    for image in images:
+        update = dict(meta)
+        update["id"] = image["id"]
+        update["tag_ids"] = merged_tag_ids([t["id"] for t in image.get("tags") or []], post_tags)
+        try:
+            client.update_image(update)
+            totals["images"] += 1
+        except RuntimeError as e:
+            log.LogError("  Failed to update image {}: {}".format(image["id"], e))
+
+
+def _apply_tag_only(client, galleries, images, new_tags, totals):
+    """Additive: only merge tags in, leave every other field untouched."""
+    if not new_tags:
+        totals["skipped"] += len(galleries) + len(images)
+        return
+    for gallery in galleries:
+        existing = [t["id"] for t in gallery.get("tags") or []]
+        merged = merged_tag_ids(existing, new_tags)
+        if merged == existing:
             totals["skipped"] += 1
             continue
-
-        if tag_only:
-            update, added = build_tag_only_update(
-                db, processor, media_row, tags, tag_matcher, existing_tags
-            )
-            if update is None:
-                totals["skipped"] += 1
-                continue
-            label = "+{} tags".format(added)
-        elif crew_only:
-            update, label = build_crew_only_update(
-                db, processor, media_row, performer_ids, creator_roles,
-                creator_name, performers, kind, existing_perf, existing_credit,
-            )
-            if update is None:
-                totals["skipped"] += 1
-                continue
-        else:
-            update, label = build_update(
-                db, processor, profile, media_row, performer_ids, studio_id,
-                performers, tags, tag_matcher, kind, creator_roles, creator_name,
-            )
-        update["id"] = stash_id
         try:
-            if kind == "scene":
-                client.update_scene(update)
-                totals["scenes"] += 1
-            else:
-                client.update_image(update)
-                totals["images"] += 1
-            log.LogDebug("  {} <- {}: {}".format(kind, username, str(label)[:60]))
+            client.update_gallery({"id": gallery["id"], "tag_ids": merged})
+            totals["galleries"] += 1
         except RuntimeError as e:
-            log.LogError("  Failed to update {} {}: {}".format(kind, stash_id, e))
+            log.LogError("  Failed to tag gallery {}: {}".format(gallery["id"], e))
+    for image in images:
+        existing = [t["id"] for t in image.get("tags") or []]
+        merged = merged_tag_ids(existing, new_tags)
+        if merged == existing:
+            totals["skipped"] += 1
+            continue
+        try:
+            client.update_image({"id": image["id"], "tag_ids": merged})
+            totals["images"] += 1
+        except RuntimeError as e:
+            log.LogError("  Failed to tag image {}: {}".format(image["id"], e))
 
+
+def _apply_crew_only(client, galleries, images, photographers, crew_ids, creator_ids, totals):
+    """Surgical: only set the photographer field and prune crew from performers."""
+    credit = ", ".join(photographers) if photographers else None
+
+    def apply(kind, record, update_fn):
+        existing_perf = [p["id"] for p in record.get("performers") or []]
+        new_perf = [pid for pid in existing_perf if pid not in crew_ids]
+        if not new_perf:
+            new_perf = list(creator_ids)
+        update = {}
+        if new_perf != existing_perf:
+            update["performer_ids"] = new_perf
+        if credit is not None and credit != (record.get("photographer") or ""):
+            update["photographer"] = credit
+        if not update:
+            totals["skipped"] += 1
+            return
+        update["id"] = record["id"]
+        try:
+            update_fn(update)
+            totals[kind] += 1
+        except RuntimeError as e:
+            log.LogError("  Failed crew update on {} {}: {}".format(kind, record["id"], e))
+
+    for gallery in galleries:
+        apply("galleries", gallery, client.update_gallery)
+    for image in images:
+        apply("images", image, client.update_image)
+
+
+# --------------------------------------------------------------------------- #
+# Collections
+# --------------------------------------------------------------------------- #
+
+def sync_collection(client, db, coll, username_map, processor, studios, performers,
+                    tags, totals):
+    title = coll["title"] or "Collection {}".format(coll["collection_id"])
+    username = coll["username"] or username_map.get(coll["model_id"])
+
+    studio_id = studios.resolve(username) if username else None
+    performer_ids = performers.resolve(username) if username else []
+    # A crew-tagged creator is credited as photographer, not a performer.
+    photographers = []
+    if username:
+        roles, name = performers.creator_credit(username)
+        if roles and name:
+            photographers.append(name)
+            performer_ids = []
+
+    date = processor.format_date(coll["posted_at"])
+    details = processor.remove_html_tags(coll["description"] or "")
+    urls = [coll["url"]] if coll["url"] else []
+
+    gallery_id = client.find_gallery_by_title(title)
+    if not gallery_id:
+        gallery_id = client.create_gallery(
+            title, urls, details, date, studio_id, performer_ids, []
+        )
+        if not gallery_id:
+            return
+        log.LogInfo("Created collection gallery '{}'".format(title))
+        totals["collections"] += 1
+    else:
+        update = {"id": gallery_id, "title": title, "details": details, "organized": True}
+        if date:
+            update["date"] = date
+        if urls:
+            update["urls"] = urls
+        if studio_id:
+            update["studio_id"] = studio_id
+        if performer_ids:
+            update["performer_ids"] = performer_ids
+        if photographers:
+            update["photographer"] = ", ".join(photographers)
+        try:
+            client.update_gallery(update)
+            totals["collections"] += 1
+        except RuntimeError as e:
+            log.LogError("  Failed to update collection gallery {}: {}".format(gallery_id, e))
+
+    # Attach every member post's images (images can live in multiple galleries).
+    image_ids = []
+    for pid in coll["post_ids"]:
+        directory = db.post_directory(pid)
+        if not directory:
+            continue
+        basename = os.path.basename(directory.rstrip("/\\"))
+        for image in client.find_images(basename, True):
+            if path_contains(image_paths(image), basename) and image["id"] not in image_ids:
+                image_ids.append(image["id"])
+    if image_ids:
+        try:
+            client.add_gallery_images(gallery_id, image_ids)
+            log.LogInfo("  '{}': attached {} image(s)".format(title, len(image_ids)))
+        except RuntimeError as e:
+            log.LogError("  Failed to attach images to '{}': {}".format(title, e))
+
+
+# --------------------------------------------------------------------------- #
+# Main
+# --------------------------------------------------------------------------- #
 
 def main():
     raw = sys.stdin.read()
@@ -516,10 +528,7 @@ def main():
 
     server = payload.get("server_connection") or {}
     args = payload.get("args") or {}
-    mode = args.get("mode")
-    full_sync = mode == "full"
-    tag_only = mode == "tag"
-    crew_only = mode == "crew"
+    mode = args.get("mode") or "sync"
 
     client = StashClient(server)
     try:
@@ -535,27 +544,19 @@ def main():
         max_title_length = int(get_setting(config, "maxTitleLength", DEFAULT_MAX_TITLE_LENGTH))
     except (TypeError, ValueError):
         max_title_length = DEFAULT_MAX_TITLE_LENGTH
-    multiple_ok = bool(get_setting(config, "multiplePerformersOk", False))
     auto_create = bool(get_setting(config, "autoCreatePerformers", False))
     auto_tag_from_text = bool(get_setting(config, "autoTagFromText", False))
-    skip_multi_file = bool(get_setting(config, "skipMultiFile", False))
     crew_tag_id = get_setting(config, "crewTagId", "")
+    sync_collections = bool(get_setting(config, "syncCollections", True))
 
     if not data_path:
         msg = "No data path configured. Set 'Patreon Data Path' in the plugin settings."
         log.LogError(msg)
         return msg
 
-    if tag_only:
-        log.LogInfo("Starting Patreon tag-only pass. Data path: {}".format(data_path))
-    elif crew_only:
-        log.LogInfo("Starting Patreon crew-credit pass. Data path: {}".format(data_path))
-    else:
-        log.LogInfo(
-            "Starting Patreon {}metadata sync. Data path: {}".format(
-                "FULL " if full_sync else "", data_path
-            )
-        )
+    tag_only = mode == "tag"
+    crew_only = mode == "crew"
+    log.LogInfo("Starting Patreon {} pass. Data path: {}".format(mode, data_path))
 
     parent_studio_id = None
     if not tag_only and not crew_only:
@@ -568,7 +569,7 @@ def main():
             log.LogError(msg)
             return msg
 
-    databases = OFDatabase.find_databases(data_path)
+    databases = PatreonDatabase.find_databases(data_path)
     log.LogInfo("Found {} user_data.db file(s)".format(len(databases)))
     if not databases:
         log.LogWarning("No user_data.db files found under {}".format(data_path))
@@ -576,50 +577,54 @@ def main():
 
     processor = MediaProcessor(max_title_length)
     studios = StudioResolver(client, parent_studio_id, load_icon(server))
-    # The crew pass is surgical maintenance: it must never create performers as
-    # a side effect of resolving @mentions, even if Create Missing Performers is
-    # enabled for the sync tasks.
+    # The crew pass is surgical maintenance and must never create performers.
     performers = PerformerResolver(client, auto_create and not crew_only, crew_tag_id)
     tags = TagResolver(client)
-    # The tag-only task always matches tags from text; the regular sync only
-    # does so when the setting is enabled.
     tag_matcher = None
     if tag_only or auto_tag_from_text:
         tag_matcher = TagTextMatcher(client)
         log.LogInfo(
-            "Auto-tagging from post text enabled ({} tags loaded)".format(
-                len(tag_matcher.matchers)
-            )
+            "Auto-tagging from post text enabled ({} tags loaded)".format(len(tag_matcher.matchers))
         )
-    totals = {"scenes": 0, "images": 0, "skipped": 0, "skipped_multifile": 0}
+    totals = {"galleries": 0, "images": 0, "collections": 0, "skipped": 0}
 
     for index, db_path in enumerate(databases):
         log.LogProgress(index / len(databases))
         try:
-            db = OFDatabase(db_path)
+            db = PatreonDatabase(db_path)
         except Exception as e:
             log.LogError("Could not open {}: {}".format(db_path, e))
             continue
         try:
-            profiles = db.profiles()
-            for profile in profiles:
-                process_profile(
-                    client, db, profile, processor, studios, performers, tags,
-                    tag_matcher, full_sync, tag_only, crew_only, multiple_ok,
-                    skip_multi_file, totals,
+            username_map = {p["user_id"]: p["username"] for p in db.profiles()}
+            posts = db.posts()
+            log.LogInfo("  {} post(s) in {}".format(len(posts), os.path.basename(db_path)))
+            for post_row in posts:
+                sync_post(
+                    client, db, post_row, username_map, processor, studios,
+                    performers, tags, tag_matcher, mode, totals,
                 )
+            if not tag_only and not crew_only and sync_collections:
+                collections = db.collections()
+                if collections:
+                    log.LogInfo("  {} collection(s)".format(len(collections)))
+                for coll in collections:
+                    sync_collection(
+                        client, db, coll, username_map, processor, studios,
+                        performers, tags, totals,
+                    )
         except Exception as e:
             log.LogError("Error processing {}: {}".format(db_path, e))
         finally:
             db.close()
 
     log.LogProgress(1.0)
-    verb = "Tagging" if tag_only else ("Crew update" if crew_only else "Sync")
-    summary = "{} complete. Scenes updated: {}, Images updated: {}, Skipped: {}".format(
-        verb, totals["scenes"], totals["images"], totals["skipped"]
+    summary = (
+        "{} complete. Galleries updated: {}, Images updated: {}, "
+        "Collections: {}, Skipped: {}".format(
+            mode, totals["galleries"], totals["images"], totals["collections"], totals["skipped"]
+        )
     )
-    if totals["skipped_multifile"]:
-        summary += ", Skipped multi-file: {}".format(totals["skipped_multifile"])
     log.LogInfo(summary)
 
 

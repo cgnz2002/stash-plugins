@@ -177,20 +177,97 @@ class StashClient:
             log.LogError("Could not create tag '{}': {}".format(name, e))
             return None
 
-    # ----- scenes / images ----------------------------------------------
+    # ----- galleries -----------------------------------------------------
+    #
+    # A patreon-dl post folder is ingested by Stash as a folder-based gallery,
+    # so posts sync onto galleries (and the images inside them). Gallery update
+    # inputs carry the same metadata fields as scenes/images except that only
+    # ``photographer`` applies (galleries have no ``director``). Verified against
+    # the Stash v0.31.x schema.
 
-    def find_scenes(self, path, include_organized):
+    def find_galleries(self, path, include_organized):
         query = """
-        query FindScenes($f: SceneFilterType!) {
-            findScenes(scene_filter: $f, filter: { per_page: -1 }) {
-                scenes { id tags { id } performers { id } director files { path basename } }
+        query FindGalleries($f: GalleryFilterType!) {
+            findGalleries(gallery_filter: $f, filter: { per_page: -1 }) {
+                galleries {
+                    id title details date urls organized photographer
+                    tags { id }
+                    performers { id }
+                    studio { id }
+                    folder { path }
+                    files { path }
+                }
             }
         }
         """
-        scene_filter = {"path": {"value": path, "modifier": "INCLUDES"}}
+        gallery_filter = {"path": {"value": path, "modifier": "INCLUDES"}}
         if not include_organized:
-            scene_filter["organized"] = False
-        return self.call(query, {"f": scene_filter})["findScenes"]["scenes"]
+            gallery_filter["organized"] = False
+        return self.call(query, {"f": gallery_filter})["findGalleries"]["galleries"]
+
+    def find_gallery_by_title(self, title):
+        """Find a gallery by exact title (case-insensitive), for idempotent
+        collection-gallery creation. Returns the first matching id or None."""
+        query = """
+        query FindGalleries($f: GalleryFilterType!) {
+            findGalleries(gallery_filter: $f, filter: { per_page: -1 }) {
+                galleries { id title }
+            }
+        }
+        """
+        variables = {"f": {"title": {"value": title, "modifier": "EQUALS"}}}
+        galleries = self.call(query, variables)["findGalleries"]["galleries"]
+        for gallery in galleries:
+            if (gallery.get("title") or "").lower() == title.lower():
+                return gallery["id"]
+        return None
+
+    def create_gallery(self, title, urls, details, date, studio_id, performer_ids, tag_ids):
+        query = """
+        mutation GalleryCreate($input: GalleryCreateInput!) {
+            galleryCreate(input: $input) { id title }
+        }
+        """
+        gallery_input = {"title": title, "organized": True}
+        if urls:
+            gallery_input["urls"] = urls
+        if details:
+            gallery_input["details"] = details
+        if date:
+            gallery_input["date"] = date
+        if studio_id:
+            gallery_input["studio_id"] = studio_id
+        if performer_ids:
+            gallery_input["performer_ids"] = performer_ids
+        if tag_ids:
+            gallery_input["tag_ids"] = tag_ids
+        try:
+            return self.call(query, {"input": gallery_input})["galleryCreate"]["id"]
+        except RuntimeError as e:
+            log.LogError("Could not create gallery '{}': {}".format(title, e))
+            return None
+
+    def update_gallery(self, gallery_input):
+        query = """
+        mutation GalleryUpdate($input: GalleryUpdateInput!) {
+            galleryUpdate(input: $input) { id }
+        }
+        """
+        self.call(query, {"input": gallery_input})
+
+    def add_gallery_images(self, gallery_id, image_ids):
+        """Attach images to a gallery (images may belong to several galleries).
+        Used to pull a collection's member-post images into its gallery."""
+        if not image_ids:
+            return
+        query = """
+        mutation AddGalleryImages($id: ID!, $ids: [ID!]!) {
+            addGalleryImages(input: { gallery_id: $id, image_ids: $ids })
+        }
+        """
+        self.call(query, {"id": gallery_id, "ids": image_ids})
+
+    # ----- images --------------------------------------------------------
 
     def find_images(self, path, include_organized):
         query = """
@@ -213,14 +290,6 @@ class StashClient:
         if not include_organized:
             image_filter["organized"] = False
         return self.call(query, {"f": image_filter})["findImages"]["images"]
-
-    def update_scene(self, scene_input):
-        query = """
-        mutation SceneUpdate($input: SceneUpdateInput!) {
-            sceneUpdate(input: $input) { id }
-        }
-        """
-        self.call(query, {"input": scene_input})
 
     def update_image(self, image_input):
         query = """
