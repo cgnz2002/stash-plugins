@@ -32,6 +32,10 @@ settings:
     displayName: Crew Tag ID
     description: "The Stash tag ID that marks crew performers (photographers). Find it in the tag's page URL, e.g. .../tags/42 means the ID is 42. Any performer with this tag -- the creator or an @mentioned collaborator -- is credited in each gallery's/image's Photographer field instead of the performers list; the studio still follows the media's source, and if a post credits only crew the creator is added as a performer so nothing is left empty. Leave empty to disable crew handling."
     type: STRING
+  dryRun:
+    displayName: Dry Run
+    description: "When on, every task previews its changes in the log (each gallery/image it would update, each studio/performer/tag/collection gallery it would create) without writing anything to Stash. Use it to check the first run, then turn off. The 'Preview (Dry Run)' task forces this on for a single run regardless of this setting. Default off."
+    type: BOOLEAN
 
 exec:
   - python
@@ -56,3 +60,8 @@ tasks:
     description: Re-apply only the crew logic to ALL Patreon galleries and images - move photographer-tagged people into the Photographer field and out of the performers list. Leaves titles, dates, studios, tags and everything else untouched.
     defaultArgs:
       mode: crew
+  - name: Preview (Dry Run)
+    description: Preview a full sync in the log without writing anything to Stash - lists every gallery/image it would update and every studio/performer/collection gallery it would create. Safe to run first.
+    defaultArgs:
+      mode: full
+      dryRun: true

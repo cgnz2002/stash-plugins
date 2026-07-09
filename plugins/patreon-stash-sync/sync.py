@@ -530,6 +530,9 @@ def main():
     args = payload.get("args") or {}
     mode = args.get("mode") or "sync"
 
+    # Reads always run; a dry run only skips (and logs) the mutating calls, so we
+    # can read settings before knowing the flag. Enabled by the task arg or the
+    # setting.
     client = StashClient(server)
     try:
         config = client.get_plugin_config(PLUGIN_ID)
@@ -537,6 +540,9 @@ def main():
         msg = "Could not read plugin settings: {}".format(e)
         log.LogError(msg)
         return msg
+
+    dry_run = bool(args.get("dryRun")) or bool(get_setting(config, "dryRun", False))
+    client.dry_run = dry_run
 
     data_path = get_setting(config, "dataPath", "")
     parent_studio_name = get_setting(config, "parentStudioName", DEFAULT_PARENT_STUDIO)
@@ -557,6 +563,8 @@ def main():
     tag_only = mode == "tag"
     crew_only = mode == "crew"
     log.LogInfo("Starting Patreon {} pass. Data path: {}".format(mode, data_path))
+    if dry_run:
+        log.LogInfo("DRY RUN - no changes will be written; logging intended changes only.")
 
     parent_studio_id = None
     if not tag_only and not crew_only:
@@ -619,11 +627,14 @@ def main():
             db.close()
 
     log.LogProgress(1.0)
+    prefix = "DRY RUN {} complete (nothing written)." if dry_run else "{} complete."
     summary = (
-        "{} complete. Galleries updated: {}, Images updated: {}, "
-        "Collections: {}, Skipped: {}".format(
-            mode, totals["galleries"], totals["images"], totals["collections"], totals["skipped"]
-        )
+        prefix + " Galleries {}: {}, Images {}: {}, Collections: {}, Skipped: {}"
+    ).format(
+        mode,
+        "to update" if dry_run else "updated", totals["galleries"],
+        "to update" if dry_run else "updated", totals["images"],
+        totals["collections"], totals["skipped"],
     )
     log.LogInfo(summary)
 

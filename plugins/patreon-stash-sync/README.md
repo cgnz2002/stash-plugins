@@ -141,6 +141,10 @@ converter first (so `user_data.db` is current), then run:
 - **Update Crew** — re-apply only the crew logic (move photographer-tagged people
   into the Photographer field and out of the performers list). Leaves every other
   field untouched.
+- **Preview (Dry Run)** — run a full sync that **writes nothing**: the log lists
+  every gallery/image it would update and every studio/performer/collection
+  gallery it would create. Run this first to check the mapping before a real
+  sync. (The *Dry Run* setting does the same for whichever task you run.)
 
 ## Notes
 

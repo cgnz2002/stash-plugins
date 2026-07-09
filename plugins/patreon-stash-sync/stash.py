@@ -13,14 +13,36 @@ import urllib.error
 import log
 
 
+def _summarize(update):
+    """Compact one-line summary of an update input for dry-run logging."""
+    parts = []
+    for key in ("title", "date", "photographer"):
+        if update.get(key):
+            parts.append("{}={!r}".format(key, update[key]))
+    if update.get("urls"):
+        parts.append("url={}".format(update["urls"][0]))
+    if "studio_id" in update:
+        parts.append("studio={}".format(update["studio_id"]))
+    if "performer_ids" in update:
+        parts.append("performers={}".format(len(update["performer_ids"])))
+    if "tag_ids" in update:
+        parts.append("tags={}".format(len(update["tag_ids"])))
+    if update.get("details"):
+        parts.append("details[{}]".format(len(update["details"])))
+    return ", ".join(parts) or "(no fields)"
+
+
 class StashClient:
-    def __init__(self, server_connection):
+    def __init__(self, server_connection, dry_run=False):
         scheme = server_connection.get("Scheme") or "http"
         port = server_connection.get("Port") or 9999
         cookie = server_connection.get("SessionCookie") or {}
         self.session = cookie.get("Value") or ""
         # The plugin always runs on the same host as the Stash server.
         self.url = "{}://localhost:{}/graphql".format(scheme, port)
+        # When set, every mutating call is logged and skipped (reads still run),
+        # so a task can preview exactly what a real sync would change.
+        self.dry_run = dry_run
 
     def call(self, query, variables=None):
         payload = json.dumps({"query": query, "variables": variables or {}}).encode("utf-8")
@@ -71,6 +93,9 @@ class StashClient:
             studioCreate(input: $input) { id name }
         }
         """
+        if self.dry_run:
+            log.LogInfo("[dry-run] would create studio '{}'".format(name))
+            return "dry:studio:{}".format(name)
         studio_input = {
             "name": name,
             "parent_id": parent_id,
@@ -129,6 +154,9 @@ class StashClient:
             performerCreate(input: $input) { id name }
         }
         """
+        if self.dry_run:
+            log.LogInfo("[dry-run] would create performer '{}'".format(name))
+            return "dry:performer:{}".format(name)
         try:
             return self.call(query, {"input": {"name": name, "urls": [url]}})[
                 "performerCreate"
@@ -171,6 +199,9 @@ class StashClient:
             tagCreate(input: $input) { id name }
         }
         """
+        if self.dry_run:
+            log.LogInfo("[dry-run] would create tag '{}'".format(name))
+            return "dry:tag:{}".format(name)
         try:
             return self.call(query, {"input": {"name": name}})["tagCreate"]["id"]
         except RuntimeError as e:
@@ -241,6 +272,9 @@ class StashClient:
             gallery_input["performer_ids"] = performer_ids
         if tag_ids:
             gallery_input["tag_ids"] = tag_ids
+        if self.dry_run:
+            log.LogInfo("[dry-run] would create gallery: {}".format(_summarize(gallery_input)))
+            return "dry:gallery:{}".format(title)
         try:
             return self.call(query, {"input": gallery_input})["galleryCreate"]["id"]
         except RuntimeError as e:
@@ -253,12 +287,20 @@ class StashClient:
             galleryUpdate(input: $input) { id }
         }
         """
+        if self.dry_run:
+            log.LogInfo("[dry-run] gallery {}: {}".format(
+                gallery_input.get("id"), _summarize(gallery_input)))
+            return
         self.call(query, {"input": gallery_input})
 
     def add_gallery_images(self, gallery_id, image_ids):
         """Attach images to a gallery (images may belong to several galleries).
         Used to pull a collection's member-post images into its gallery."""
         if not image_ids:
+            return
+        if self.dry_run:
+            log.LogInfo("[dry-run] would attach {} image(s) to gallery {}".format(
+                len(image_ids), gallery_id))
             return
         query = """
         mutation AddGalleryImages($id: ID!, $ids: [ID!]!) {
@@ -297,4 +339,8 @@ class StashClient:
             imageUpdate(input: $input) { id }
         }
         """
+        if self.dry_run:
+            log.LogInfo("[dry-run] image {}: {}".format(
+                image_input.get("id"), _summarize(image_input)))
+            return
         self.call(query, {"input": image_input})
