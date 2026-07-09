@@ -98,11 +98,12 @@ class StashClient:
             return "dry:studio:{}".format(name)
         studio_input = {
             "name": name,
-            "parent_id": parent_id,
             "urls": [url],
             "details": details,
             "ignore_auto_tag": False,
         }
+        if parent_id:
+            studio_input["parent_id"] = parent_id
         if image:
             studio_input["image"] = image
         return self.call(query, {"input": studio_input})["studioCreate"]["id"]

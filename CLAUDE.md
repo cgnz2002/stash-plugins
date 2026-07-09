@@ -27,15 +27,17 @@ Currently there are two plugins:
   [`timekillerj/ofscraper-stash-sync`](https://github.com/timekillerj/ofscraper-stash-sync).
 - **`plugins/patreon-stash-sync/`** — Patreon Metadata Sync. Syncs metadata for
   Patreon content downloaded with
-  [patreon-dl](https://github.com/patrickkfkan/patreon-dl). A standalone converter
-  (`convert_patreon_to_db.py`) walks patreon-dl's output — preferring each post's
-  flat `post_info/info.txt` and falling back to `post-api.json` for ids/vanity —
-  into a `user_data.db`. Because Patreon posts are downloaded as folders that
-  Stash ingests as **galleries**, the plugin syncs each post onto its Stash
-  **gallery and the images inside it** (matched by the post folder basename), and
-  creates one gallery per Patreon **collection** with the member posts' images
-  attached. It shares of-stash-sync's Stash client / logging / text handling. See
-  that plugin's README for the pipeline.
+  [patreon-dl](https://github.com/patrickkfkan/patreon-dl). Unlike of-stash-sync,
+  there is **no database step**: patreon-dl writes each post's metadata beside the
+  media (`post_info/info.txt`, `post_info/post-api.json`) and collection JSON, so
+  `patreon_source.py` reads those files **directly** off the data path. Because
+  Stash ingests each post folder as a **gallery**, the plugin syncs each post onto
+  its Stash **gallery and the images inside it** (matched by the post folder
+  basename, which embeds the post id), and creates one gallery per Patreon
+  **collection** with the member posts' images attached. Studios (parent +
+  per-creator) and the creator performer are created if missing. A Patreon post
+  has a single creator, so there is no @mention/crew handling and the title is
+  used as-is. See that plugin's README for the pipeline.
 
 ## Repository layout
 
@@ -54,9 +56,8 @@ plugins/
     onlyfans.png                     Studio icon
   patreon-stash-sync/
     patreon-stash-sync.yml           Plugin manifest (gallery/collection tasks)
-    convert_patreon_to_db.py         patreon-dl output (info.txt/post-api.json) -> user_data.db
     sync.py                          Orchestration: posts -> galleries + images, collections -> galleries
-    patreon_db.py                    Read-only reader for the post/collection user_data.db
+    patreon_source.py                Reads patreon-dl's on-disk info.txt/post-api.json/collection JSON
     stash.py                         Stash GraphQL client (adds gallery ops)
     media.py, log.py                 Copied from of-stash-sync
     README.md                        User-facing docs + pipeline diagram

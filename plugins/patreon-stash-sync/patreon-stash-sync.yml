@@ -1,40 +1,28 @@
 name: Patreon Metadata Sync
-description: Sync Patreon post metadata (title, description, date, URL, performers, studio) onto matching Stash galleries and the images inside them, and build a gallery per Patreon collection. Reads a user_data.db produced from patreon-dl output by convert_patreon_to_db.py.
-version: 2.0.0
+description: Sync Patreon post metadata (title, description, date, URL, studio, creator performer) onto matching Stash galleries and the images inside them, reading patreon-dl's on-disk post_info files directly, and build a gallery per Patreon collection.
+version: 3.0.0
 url: https://github.com/cgnz2002/stash-plugins
 
 settings:
   dataPath:
     displayName: Patreon Data Path
-    description: "Directory (as seen inside the Stash container) searched recursively for user_data.db files produced by convert_patreon_to_db.py. Example: /volume1/stash/media/patreon"
+    description: "Directory (as seen inside the Stash container) that patreon-dl downloads into, searched recursively for post folders. Example: /data/patreon"
     type: STRING
   parentStudioName:
     displayName: Parent Studio Name
-    description: "Name of the top-level Patreon studio. Per-creator studios are created beneath it. Default: Patreon (network)"
+    description: "Name of the top-level Patreon studio. Per-creator studios are created beneath it, and it is created automatically if it doesn't exist. Default: Patreon (network)"
     type: STRING
-  maxTitleLength:
-    displayName: Max Title Length
-    description: "Maximum length of a synced gallery/image title before it is truncated at a sentence or word boundary. Default: 65"
-    type: NUMBER
-  autoCreatePerformers:
-    displayName: Create Missing Performers
-    description: "When on, create a sparse performer for the creator (and any unmatched @mentions in the post text) instead of leaving the performer unset. Default off."
-    type: BOOLEAN
   autoTagFromText:
     displayName: Auto-tag From Post Text
-    description: "When on, scan each post's text and attach any existing Stash tags whose name or alias appears in it (matched the same way as Stash's auto-tagger). Only tags are added, never created. Tags set to ignore auto-tag are skipped. Default off."
+    description: "When on, scan each post's title/description and attach any existing Stash tags whose name or alias appears in it (matched the same way as Stash's auto-tagger). Only tags are added, never created. Tags set to ignore auto-tag are skipped. Default off."
     type: BOOLEAN
   syncCollections:
     displayName: Sync Collections
     description: "When on, the Sync and Full Sync tasks create a Stash gallery for each Patreon collection and attach the member posts' images to it. Default on."
     type: BOOLEAN
-  crewTagId:
-    displayName: Crew Tag ID
-    description: "The Stash tag ID that marks crew performers (photographers). Find it in the tag's page URL, e.g. .../tags/42 means the ID is 42. Any performer with this tag -- the creator or an @mentioned collaborator -- is credited in each gallery's/image's Photographer field instead of the performers list; the studio still follows the media's source, and if a post credits only crew the creator is added as a performer so nothing is left empty. Leave empty to disable crew handling."
-    type: STRING
   dryRun:
     displayName: Dry Run
-    description: "When on, every task previews its changes in the log (each gallery/image it would update, each studio/performer/tag/collection gallery it would create) without writing anything to Stash. Use it to check the first run, then turn off. The 'Preview (Dry Run)' task forces this on for a single run regardless of this setting. Default off."
+    description: "When on, every task previews its changes in the log (each gallery/image it would update, each studio/performer/collection gallery it would create) without writing anything to Stash. The 'Preview (Dry Run)' task forces this on for a single run regardless of this setting. Default off."
     type: BOOLEAN
 
 exec:
@@ -56,10 +44,6 @@ tasks:
     description: Add tags from post text to ALL Patreon galleries and images. Only adds tags, leaves every other field untouched. Safe for manually edited galleries.
     defaultArgs:
       mode: tag
-  - name: Update Crew
-    description: Re-apply only the crew logic to ALL Patreon galleries and images - move photographer-tagged people into the Photographer field and out of the performers list. Leaves titles, dates, studios, tags and everything else untouched.
-    defaultArgs:
-      mode: crew
   - name: Preview (Dry Run)
     description: Preview a full sync in the log without writing anything to Stash - lists every gallery/image it would update and every studio/performer/collection gallery it would create. Safe to run first.
     defaultArgs:

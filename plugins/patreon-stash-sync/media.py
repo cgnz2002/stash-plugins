@@ -59,7 +59,7 @@ def compile_name_pattern(name):
 
 
 class MediaProcessor:
-    def __init__(self, max_title_length):
+    def __init__(self, max_title_length=65):
         self.max_title_length = max_title_length
 
     def remove_html_tags(self, text):
