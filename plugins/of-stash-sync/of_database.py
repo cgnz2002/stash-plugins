@@ -104,6 +104,21 @@ class OFDatabase:
             (filename,),
         ).fetchone()
 
+    def medias_for_model(self, user_id):
+        """Return every media row for a creator (post_id, filename, media_type,
+        api_type, link, posted_at), for grouping a post's media into a gallery.
+
+        Older single-creator databases have no model_id column, so they return
+        all rows (which is correct there -- one creator per database).
+        """
+        date = "{} AS posted_at".format(self._date_col)
+        cols = "post_id, filename, media_type, api_type, link, {}".format(date)
+        if self._has_model_id:
+            return self.conn.execute(
+                "SELECT {} FROM medias WHERE model_id = ?".format(cols), (user_id,)
+            ).fetchall()
+        return self.conn.execute("SELECT {} FROM medias".format(cols)).fetchall()
+
     def post_meta(self, post_id):
         """Return the first matching post/story/message/other/product row, if any."""
         for table in self.TEXT_TABLES:

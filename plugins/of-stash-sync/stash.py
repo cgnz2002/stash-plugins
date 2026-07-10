@@ -229,3 +229,54 @@ class StashClient:
         }
         """
         self.call(query, {"input": image_input})
+
+    # ----- galleries -----------------------------------------------------
+    #
+    # OnlyFans posts aren't one-folder-per-post, so a post's images are grouped
+    # into a user-created gallery (keyed by the post URL for idempotency). A
+    # gallery can relate to scenes via scene_ids (Stash relates scenes to
+    # galleries, not to images), so a post's video is linked to its gallery.
+
+    def find_galleries_for_studio(self, studio_id):
+        """Galleries under a creator's studio, with their urls, so per-post
+        galleries can be matched by url without a query per post."""
+        query = """
+        query FindGalleries($f: GalleryFilterType!) {
+            findGalleries(gallery_filter: $f, filter: { per_page: -1 }) {
+                galleries { id urls }
+            }
+        }
+        """
+        variables = {"f": {"studios": {"value": [studio_id], "modifier": "INCLUDES"}}}
+        return self.call(query, variables)["findGalleries"]["galleries"]
+
+    def create_gallery(self, gallery_input):
+        query = """
+        mutation GalleryCreate($input: GalleryCreateInput!) {
+            galleryCreate(input: $input) { id }
+        }
+        """
+        try:
+            return self.call(query, {"input": gallery_input})["galleryCreate"]["id"]
+        except RuntimeError as e:
+            log.LogError("Could not create gallery '{}': {}".format(
+                gallery_input.get("title"), e))
+            return None
+
+    def update_gallery(self, gallery_input):
+        query = """
+        mutation GalleryUpdate($input: GalleryUpdateInput!) {
+            galleryUpdate(input: $input) { id }
+        }
+        """
+        self.call(query, {"input": gallery_input})
+
+    def add_gallery_images(self, gallery_id, image_ids):
+        if not image_ids:
+            return
+        query = """
+        mutation AddGalleryImages($id: ID!, $ids: [ID!]!) {
+            addGalleryImages(input: { gallery_id: $id, image_ids: $ids })
+        }
+        """
+        self.call(query, {"id": gallery_id, "ids": image_ids})

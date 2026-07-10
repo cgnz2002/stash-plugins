@@ -24,8 +24,22 @@ creator profile in it:
   **performers** (the creator plus any `@mentioned` accounts).
 - Credits anyone tagged as **crew** (see *Crew Tag Name*) in the scene
   **Director** / image **Photographer** field instead of the performers list.
+- Groups each post's media into a **gallery** (see below).
 - Optionally tags media `paid` / `archived`.
 - Marks each synced item **organized** so the normal sync skips it next time.
+
+### Post galleries
+
+On the **Sync** and **Full Sync** tasks, the plugin groups a creator's media by
+post id and makes one **gallery** per post, carrying the same metadata (title,
+details, date, studio, performers, tags, URL) as the post's scenes/images. A
+gallery is created when a post has **2+ images**, or **an image alongside a
+video** — because Stash relates scenes to galleries (not to images), so the
+gallery is how a post's stills get linked to its video: the gallery's scene link
+points at the post's scene. Galleries are keyed by the post URL, so re-runs don't
+duplicate them; a plain Sync creates missing galleries and adds any new images
+(never overwriting a gallery you've edited), while Full Sync also refreshes their
+metadata.
 
 Both current and older OF-Scraper database layouts are supported.
 

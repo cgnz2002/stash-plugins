@@ -370,6 +370,139 @@ def build_update(db, processor, profile, media_row, creator_ids, studio_id,
     return update, title
 
 
+def _gallery_meta(db, processor, profile, post_id, group, performers, tags,
+                  tag_matcher, studio_id, creator_ids, creator_roles, creator_name,
+                  url, scene_ids):
+    """Build a gallery input for one post, from the same post text/date/studio/
+    performers/tags used for its scenes and images. Crew are credited in the
+    gallery photographer field (galleries have no director)."""
+    username = profile["username"]
+    date = processor.format_date(group["posted_at"])
+    meta = db.post_meta(post_id)
+    text = meta["text"] if (meta and meta["text"]) else ""
+
+    _director, photographer_names, _crew_ids, mention_ids = collect_crew(
+        processor, performers, text, creator_roles, creator_name, creator_ids
+    )
+    if text:
+        title, details = processor.process_text(text)
+    else:
+        api_type = group.get("api_type")
+        title = "{}: {}".format(api_type, date) if api_type else date
+        details = ""
+
+    performer_ids = [] if creator_roles else list(creator_ids)
+    for pid in mention_ids:
+        if pid not in performer_ids:
+            performer_ids.append(pid)
+    if not performer_ids:
+        performer_ids = list(creator_ids)
+
+    gallery_input = {
+        "title": title,
+        "details": details,
+        "studio_id": studio_id,
+        "performer_ids": performer_ids,
+        "tag_ids": collect_tag_ids(processor, meta, text, tags, tag_matcher),
+        "urls": [url],
+        "organized": True,
+    }
+    if date:
+        gallery_input["date"] = date
+    if photographer_names:
+        gallery_input["photographer"] = ", ".join(photographer_names)
+    if scene_ids:
+        gallery_input["scene_ids"] = scene_ids
+    return gallery_input, title
+
+
+def build_post_galleries(client, db, profile, processor, performers, tags,
+                         tag_matcher, studio_id, creator_ids, creator_roles,
+                         creator_name, full_sync, totals):
+    """Group a creator's media by post and make one gallery per post.
+
+    A gallery is created when a post has 2+ images, or an image alongside a video
+    (Stash relates scenes to galleries, not to images, so the gallery carries the
+    scene link). Galleries are keyed by the post URL: a plain sync creates missing
+    ones and adds images; a full sync also refreshes their metadata.
+    """
+    user_id = profile["user_id"]
+    username = profile["username"]
+
+    # filename -> (kind, stash id), organized media included, so a gallery holds
+    # all of a post's media regardless of the sync/full mode.
+    index = {}
+    for scene in client.find_scenes(username, True):
+        for f in scene.get("files") or []:
+            index[os.path.basename(f["path"])] = ("scene", scene["id"])
+    for image in client.find_images(username, True):
+        for vf in image.get("visual_files") or []:
+            basename = vf.get("basename")
+            if basename:
+                index[basename] = ("image", image["id"])
+
+    groups = {}
+    for row in db.medias_for_model(user_id):
+        post_id = row["post_id"]
+        if post_id is None:
+            continue
+        post_id = str(post_id)
+        g = groups.setdefault(post_id, {
+            "images": [], "scenes": [], "posted_at": row["posted_at"],
+            "api_type": row["api_type"],
+        })
+        entry = index.get(row["filename"])
+        if not entry:
+            continue
+        kind, stash_id = entry
+        bucket = g["images"] if kind == "image" else g["scenes"]
+        if stash_id not in bucket:
+            bucket.append(stash_id)
+
+    # Existing per-post galleries for this creator's studio, keyed by url.
+    by_url = {}
+    if studio_id:
+        for gal in client.find_galleries_for_studio(studio_id):
+            for u in gal.get("urls") or []:
+                by_url[u] = gal["id"]
+
+    for post_id, group in groups.items():
+        images, scenes = group["images"], group["scenes"]
+        # 2+ images, or an image alongside a video.
+        if not (len(images) >= 2 or (images and scenes)):
+            continue
+        if not post_id.isdigit():
+            continue
+        url = "https://www.onlyfans.com/{}/{}".format(post_id, username)
+        existing = by_url.get(url)
+        try:
+            if existing:
+                if full_sync:
+                    gallery_input, _title = _gallery_meta(
+                        db, processor, profile, post_id, group, performers, tags,
+                        tag_matcher, studio_id, creator_ids, creator_roles,
+                        creator_name, url, scenes,
+                    )
+                    gallery_input["id"] = existing
+                    client.update_gallery(gallery_input)
+                client.add_gallery_images(existing, images)
+            else:
+                gallery_input, title = _gallery_meta(
+                    db, processor, profile, post_id, group, performers, tags,
+                    tag_matcher, studio_id, creator_ids, creator_roles,
+                    creator_name, url, scenes,
+                )
+                gid = client.create_gallery(gallery_input)
+                if not gid:
+                    continue
+                client.add_gallery_images(gid, images)
+                log.LogInfo("Created gallery '{}' ({} image(s){})".format(
+                    title, len(images), ", linked scene" if scenes else ""))
+            totals["galleries"] += 1
+        except RuntimeError as e:
+            log.LogError("  Failed gallery for post {}: {}".format(post_id, e))
+
+
 def process_profile(client, db, profile, processor, studios, performers, tags,
                     tag_matcher, full_sync, tag_only, crew_only, multiple_ok,
                     skip_multi_file, totals):
@@ -498,6 +631,14 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
         except RuntimeError as e:
             log.LogError("  Failed to update {} {}: {}".format(kind, stash_id, e))
 
+    # Group each post's media into a gallery (and link its scene). Only on the
+    # sync/full passes -- the tag and crew passes stay surgical.
+    if not tag_only and not crew_only:
+        build_post_galleries(
+            client, db, profile, processor, performers, tags, tag_matcher,
+            studio_id, performer_ids, creator_roles, creator_name, full_sync, totals,
+        )
+
 
 def main():
     raw = sys.stdin.read()
@@ -583,7 +724,7 @@ def main():
                 len(tag_matcher.matchers)
             )
         )
-    totals = {"scenes": 0, "images": 0, "skipped": 0, "skipped_multifile": 0}
+    totals = {"scenes": 0, "images": 0, "galleries": 0, "skipped": 0, "skipped_multifile": 0}
 
     for index, db_path in enumerate(databases):
         log.LogProgress(index / len(databases))
@@ -610,6 +751,8 @@ def main():
     summary = "{} complete. Scenes updated: {}, Images updated: {}, Skipped: {}".format(
         verb, totals["scenes"], totals["images"], totals["skipped"]
     )
+    if totals["galleries"]:
+        summary += ", Galleries: {}".format(totals["galleries"])
     if totals["skipped_multifile"]:
         summary += ", Skipped multi-file: {}".format(totals["skipped_multifile"])
     log.LogInfo(summary)
