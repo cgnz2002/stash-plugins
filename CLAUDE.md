@@ -82,8 +82,13 @@ manifest). At runtime:
 
 The four tasks are defined in the manifest and selected by `args.mode`:
 
-- `mode: sync` — only unorganized OnlyFans scenes/images.
-- `mode: full` — re-sync everything, ignoring the `organized` flag.
+- `mode: sync` — only unorganized OnlyFans scenes/images. Also groups each post's
+  media into a gallery (2+ images, or an image + a video), linking the post's
+  scene to the gallery (Stash relates scenes to galleries, not images). Galleries
+  are keyed by post URL for idempotency; a plain sync only creates missing ones
+  and adds images.
+- `mode: full` — re-sync everything, ignoring the `organized` flag. Also refreshes
+  the per-post galleries' metadata.
 - `mode: tag` — additive only; adds tags from post text, never touches other
   fields. Safe over manually edited media.
 - `mode: crew` — surgical crew-credit pass. For all OnlyFans media it moves
