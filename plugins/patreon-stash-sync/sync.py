@@ -61,6 +61,7 @@ class PerformerResolver:
     def __init__(self, client):
         self.client = client
         self.cache = {}
+        self.names = {}  # username -> creator's Stash display name (for the photographer credit)
 
     def resolve(self, username):
         if not username:
@@ -70,6 +71,7 @@ class PerformerResolver:
             return self.cache[key]
         result = self.client.find_performers_by_name(username)
         ids = [p["id"] for p in result["exact"]]
+        name = result["exact"][0]["name"] if result["exact"] else None
         if not ids:
             # Stash compiles EQUALS to SQL LIKE, so a vanity containing '_' can
             # collide with an existing performer name on create. Attach a single
@@ -77,6 +79,7 @@ class PerformerResolver:
             near = result["name_like"]
             if len(near) == 1:
                 ids = [near[0]["id"]]
+                name = near[0]["name"]
                 log.LogInfo("Matched existing performer '{}' for '{}'".format(
                     near[0]["name"], username))
             elif len(near) > 1:
@@ -90,9 +93,16 @@ class PerformerResolver:
                 new_id = self.client.create_performer(username, creator_url(username))
                 if new_id:
                     ids = [new_id]
+                    name = username
                     log.LogInfo("Created performer '{}'".format(username))
         self.cache[key] = ids
+        self.names[key] = name or username
         return ids
+
+    def name_for(self, username):
+        """The creator's Stash display name (falls back to the vanity), used to
+        credit them in the gallery/image photographer field."""
+        return self.names.get((username or "").lower()) or username
 
 
 class StudioResolver:
@@ -233,9 +243,10 @@ def merged_tag_ids(existing, new):
     return merged
 
 
-def build_meta(processor, post, studio_id, performer_ids):
+def build_meta(processor, post, studio_id, performer_ids, photographer):
     """Fields shared by a post's gallery and its images (title as-is, details
-    HTML-stripped as a safety net, date normalised)."""
+    HTML-stripped as a safety net, date normalised). The creator is credited both
+    as the performer and in the photographer field."""
     details = processor.remove_html_tags(post["content"] or "")
     date = processor.format_date(post["date"])
     meta = {"title": post["title"] or "", "details": details, "organized": True}
@@ -247,6 +258,8 @@ def build_meta(processor, post, studio_id, performer_ids):
         meta["studio_id"] = studio_id
     if performer_ids:
         meta["performer_ids"] = performer_ids
+    if photographer:
+        meta["photographer"] = photographer
     return meta
 
 
@@ -273,7 +286,8 @@ def sync_post(client, post, galleries, images, processor, studios, performers,
 
     studio_id = studios.resolve(post["vanity"])
     performer_ids = performers.resolve(post["vanity"])
-    meta = build_meta(processor, post, studio_id, performer_ids)
+    photographer = performers.name_for(post["vanity"]) if post["vanity"] else None
+    meta = build_meta(processor, post, studio_id, performer_ids, photographer)
     post_tags = tag_matcher.match(processor.remove_html_tags(text)) if (tag_matcher and text) else []
 
     for gallery in galleries:
@@ -319,13 +333,15 @@ def sync_collection(client, coll, img_by_id, processor, studios, performers, tot
     title = coll["title"] or "Collection {}".format(coll["collection_id"])
     studio_id = studios.resolve(coll["vanity"])
     performer_ids = performers.resolve(coll["vanity"])
+    photographer = performers.name_for(coll["vanity"]) if coll["vanity"] else None
     date = processor.format_date(coll["date"])
     details = processor.remove_html_tags(coll["description"] or "")
     urls = [coll["url"]] if coll["url"] else []
 
     gallery_id = client.find_gallery_by_title(title)
     if not gallery_id:
-        gallery_id = client.create_gallery(title, urls, details, date, studio_id, performer_ids, [])
+        gallery_id = client.create_gallery(
+            title, urls, details, date, studio_id, performer_ids, [], photographer)
         if not gallery_id:
             return
         log.LogInfo("Created collection gallery '{}'".format(title))
@@ -339,6 +355,8 @@ def sync_collection(client, coll, img_by_id, processor, studios, performers, tot
             update["studio_id"] = studio_id
         if performer_ids:
             update["performer_ids"] = performer_ids
+        if photographer:
+            update["photographer"] = photographer
         try:
             client.update_gallery(update)
         except RuntimeError as e:
