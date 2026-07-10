@@ -256,7 +256,8 @@ class StashClient:
                 return gallery["id"]
         return None
 
-    def create_gallery(self, title, urls, details, date, studio_id, performer_ids, tag_ids):
+    def create_gallery(self, title, urls, details, date, studio_id, performer_ids,
+                       tag_ids, photographer=None):
         query = """
         mutation GalleryCreate($input: GalleryCreateInput!) {
             galleryCreate(input: $input) { id title }
@@ -275,6 +276,8 @@ class StashClient:
             gallery_input["performer_ids"] = performer_ids
         if tag_ids:
             gallery_input["tag_ids"] = tag_ids
+        if photographer:
+            gallery_input["photographer"] = photographer
         if self.dry_run:
             log.LogInfo("[dry-run] would create gallery: {}".format(_summarize(gallery_input)))
             return "dry:gallery:{}".format(title)
