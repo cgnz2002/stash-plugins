@@ -81,12 +81,12 @@ Stash first so the scenes and images exist.
 
 - **Sync OF Metadata** - sync only unorganized OnlyFans scenes and images.
 - **Full Sync OF Metadata** - re-sync everything, ignoring the organized flag.
-- **Tag OF From Text** - add tags from post text to ALL OnlyFans scenes and
-  images (organized or not). This only *adds* tags; it never changes title,
-  details, date, performers, studio or any other field, and never removes
-  existing tags. Use this to tag media without a full re-sync overwriting manual
-  edits. It always matches tags from text regardless of the *Auto-tag From Post
-  Text* setting.
+- **Tag OF From Text** - add tags to ALL OnlyFans scenes, images **and galleries**
+  (organized or not): the `OnlyFans` tag plus any tags matched from the post text.
+  This only *adds* tags; it never changes title, details, date, performers, studio
+  or any other field, and never removes existing tags. Use this to tag media
+  without a full re-sync overwriting manual edits. It always matches tags from
+  text regardless of the *Auto-tag From Post Text* setting.
 - **Update Crew** - re-apply only the crew logic to ALL OnlyFans scenes and
   images: move crew-tagged people (see *Crew Tag Name*) into the Director /
   Photographer field and out of the performers list. It leaves titles, dates,

@@ -512,6 +512,45 @@ def build_post_galleries(client, db, profile, processor, performers, tags,
             log.LogError("  Failed gallery for post {}: {}".format(post_id, e))
 
 
+def tag_post_galleries(client, db, profile, processor, tags, tag_matcher, totals):
+    """Additive tag pass over the creator's per-post galleries: merge in the
+    OnlyFans (plus paid/archived/text) tags, leaving every other gallery field
+    untouched. Used by the tag task, which otherwise doesn't touch galleries.
+    """
+    username = profile["username"]
+    # Find (never create) the creator studio, so the tag task stays surgical.
+    studio_id = client.find_studio("{} (OnlyFans)".format(username))
+    if not studio_id:
+        return
+    for gal in client.find_galleries_for_studio(studio_id):
+        # Recover the post id from the gallery url (.../<post_id>/<username>).
+        post_id = None
+        for u in gal.get("urls") or []:
+            if "onlyfans.com" in u:
+                parts = u.rstrip("/").split("/")
+                if len(parts) >= 2 and parts[-2].isdigit():
+                    post_id = parts[-2]
+                    break
+        meta = db.post_meta(post_id) if post_id else None
+        text = meta["text"] if (meta and meta["text"]) else ""
+        new_tags = collect_tag_ids(processor, meta, text, tags, tag_matcher)
+
+        existing = [t["id"] for t in gal.get("tags") or []]
+        merged = list(existing)
+        added = 0
+        for tag_id in new_tags:
+            if tag_id not in merged:
+                merged.append(tag_id)
+                added += 1
+        if added == 0:
+            continue
+        try:
+            client.update_gallery({"id": gal["id"], "tag_ids": merged})
+            totals["galleries"] += 1
+        except RuntimeError as e:
+            log.LogError("  Failed to tag gallery {}: {}".format(gal["id"], e))
+
+
 def process_profile(client, db, profile, processor, studios, performers, tags,
                     tag_matcher, full_sync, tag_only, crew_only, multiple_ok,
                     skip_multi_file, totals):
@@ -640,9 +679,12 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
         except RuntimeError as e:
             log.LogError("  Failed to update {} {}: {}".format(kind, stash_id, e))
 
-    # Group each post's media into a gallery (and link its scene). Only on the
-    # sync/full passes -- the tag and crew passes stay surgical.
-    if not tag_only and not crew_only:
+    # Galleries: the sync/full passes build (and metadata-sync) per-post
+    # galleries; the tag pass additively tags the existing ones; the crew pass
+    # leaves galleries alone.
+    if tag_only:
+        tag_post_galleries(client, db, profile, processor, tags, tag_matcher, totals)
+    elif not crew_only:
         build_post_galleries(
             client, db, profile, processor, performers, tags, tag_matcher,
             studio_id, performer_ids, creator_roles, creator_name, full_sync, totals,
