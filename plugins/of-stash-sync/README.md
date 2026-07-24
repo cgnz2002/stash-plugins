@@ -25,6 +25,8 @@ creator profile in it:
 - Credits anyone tagged as **crew** (see *Crew Tag Name*) in the scene
   **Director** / image **Photographer** field instead of the performers list.
 - Groups each post's media into a **gallery** (see below).
+- Tags every synced scene, image and gallery with an **`OnlyFans`** tag (created
+  if missing), so all OnlyFans media is filterable by one tag.
 - Optionally tags media `paid` / `archived`.
 - Marks each synced item **organized** so the normal sync skips it next time.
 

@@ -20,6 +20,9 @@ PLUGIN_ID = "of-stash-sync"
 
 DEFAULT_PARENT_STUDIO = "OnlyFans (network)"
 DEFAULT_MAX_TITLE_LENGTH = 65
+# Tag added to every synced scene, image and gallery so all OnlyFans media is
+# filterable by one tag. Created on first use if missing.
+DEFAULT_SITE_TAG = "OnlyFans"
 
 
 def get_setting(config, key, default):
@@ -190,9 +193,15 @@ def load_icon(server_connection):
     return None
 
 
-def collect_tag_ids(processor, meta, text, tags, tag_matcher):
-    """Tag ids implied by a post: paid/archived plus text matches."""
+def collect_tag_ids(processor, meta, text, tags, tag_matcher, site_tag=DEFAULT_SITE_TAG):
+    """Tag ids implied by a post: the site tag (always), plus paid/archived and
+    text matches. Applied to every synced scene, image and gallery; the surgical
+    crew pass never calls this, so it stays tag-free."""
     tag_ids = []
+    if site_tag:
+        tag_id = tags.resolve(site_tag)
+        if tag_id:
+            tag_ids.append(tag_id)
     if meta:
         price = meta["price"] or 0
         if meta["paid"] and price and int(price) > 0:
