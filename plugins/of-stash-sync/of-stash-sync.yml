@@ -1,6 +1,6 @@
 name: OnlyFans Metadata Sync
 description: Sync OF-Scraper metadata (title, details, date, URL, performers, studio) from user_data.db files into matching Stash scenes and images, and group each post's media into a gallery (linked to the post's scene).
-version: 1.7.0
+version: 1.7.1
 url: https://github.com/cgnz2002/stash-plugins
 
 settings:
@@ -53,7 +53,7 @@ tasks:
     defaultArgs:
       mode: full
   - name: Tag OF From Text
-    description: Add tags from post text to ALL OnlyFans scenes and images. Only adds tags, leaves every other field untouched. Safe for manually edited scenes.
+    description: Add tags (the OnlyFans tag plus any from post text) to ALL OnlyFans scenes, images and galleries. Only adds tags, leaves every other field untouched. Safe for manually edited scenes.
     defaultArgs:
       mode: tag
   - name: Update Crew
