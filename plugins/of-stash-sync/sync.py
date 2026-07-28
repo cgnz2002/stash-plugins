@@ -390,9 +390,6 @@ def _gallery_meta(db, processor, profile, post_id, group, performers, tags,
     meta = db.post_meta(post_id)
     text = meta["text"] if (meta and meta["text"]) else ""
 
-    _director, photographer_names, _crew_ids, mention_ids = collect_crew(
-        processor, performers, text, creator_roles, creator_name, creator_ids
-    )
     if text:
         title, details = processor.process_text(text)
     else:
@@ -400,10 +397,19 @@ def _gallery_meta(db, processor, profile, post_id, group, performers, tags,
         title = "{}: {}".format(api_type, date) if api_type else date
         details = ""
 
-    performer_ids = [] if creator_roles else list(creator_ids)
-    for pid in mention_ids:
-        if pid not in performer_ids:
-            performer_ids.append(pid)
+    # On galleries, crew are KEPT as linked performers. Stash's director/
+    # photographer fields are free text with no link back to a performer, so
+    # browsing a director's/photographer's work is hard; a gallery groups a whole
+    # post, so it's the natural place to carry that link. (Scenes and images still
+    # move crew out of the performers list into the director/photographer field --
+    # see build_update / build_crew_only_update.) So a gallery's performers are
+    # everyone credited: the creator plus every @mentioned account, crew or not.
+    performer_ids = list(creator_ids)
+    if text:
+        for mention in processor.parse_mentions(text):
+            for pid in performers.resolve(mention, from_mention=True):
+                if pid not in performer_ids:
+                    performer_ids.append(pid)
     if not performer_ids:
         performer_ids = list(creator_ids)
 
@@ -415,11 +421,13 @@ def _gallery_meta(db, processor, profile, post_id, group, performers, tags,
         "tag_ids": collect_tag_ids(processor, meta, text, tags, tag_matcher),
         "urls": [url],
         "organized": True,
+        # Crew are linked performers on galleries, so the free-text photographer
+        # field is left empty (and any value left by older versions is cleared on
+        # a full sync).
+        "photographer": "",
     }
     if date:
         gallery_input["date"] = date
-    if photographer_names:
-        gallery_input["photographer"] = ", ".join(photographer_names)
     if scene_ids:
         gallery_input["scene_ids"] = scene_ids
     return gallery_input, title

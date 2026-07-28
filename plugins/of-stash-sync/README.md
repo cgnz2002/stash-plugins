@@ -111,6 +111,13 @@ The studio always follows where the media was sourced from, and if a post
 credits only crew the creator is still added as a performer so the media is
 never left empty.
 
+On **galleries**, crew are instead **kept as linked performers**. Stash's
+Director/Photographer fields are free text with no link back to a performer, so
+browsing their work is hard; a gallery groups a whole post, so it carries the
+crew credit as a real performer link (their crew tag still distinguishes them).
+The gallery's Photographer field is left empty. So: scenes and images move crew
+into Director/Photographer, while the post's gallery keeps them clickable.
+
 ## Notes
 
 - Databases are opened read-only, so running OF-Scraper at the same time is
