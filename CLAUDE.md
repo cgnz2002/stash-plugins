@@ -125,7 +125,11 @@ The four tasks are defined in the manifest and selected by `args.mode`:
   as a performer when a post credits only crew (so media is never
   performer-less), and the **studio always follows the source db**, never the
   credited director. `build_update` applies this during sync; `build_crew_only_update`
-  applies just this part for the `crew` task.
+  applies just this part for the `crew` task. **Galleries are the exception**:
+  `_gallery_meta` keeps crew (and every @mention) as **linked performers** on the
+  post's gallery and leaves the gallery photographer empty, because Stash's
+  director/photographer fields don't link back to a performer — so a crew
+  member's work is only browsable via the gallery's performer link.
 
 ## Hard constraints — keep these intact
 
