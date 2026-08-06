@@ -123,6 +123,17 @@ class StashClient:
                 seen.add(performer["id"])
         return {"exact": exact, "name_like": name_like}
 
+    def find_performer(self, performer_id):
+        """Return {'name', 'alias_list'} for a performer id, or None. Used to map
+        a Stash performer back to its OF username: the username is the performer's
+        name or (usually) one of its aliases."""
+        query = """
+        query FindPerformer($id: ID!) {
+            findPerformer(id: $id) { id name alias_list }
+        }
+        """
+        return self.call(query, {"id": str(performer_id)}).get("findPerformer")
+
     def create_performer(self, name, url):
         query = """
         mutation PerformerCreate($input: PerformerCreateInput!) {

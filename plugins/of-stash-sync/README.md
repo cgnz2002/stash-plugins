@@ -87,6 +87,15 @@ Stash first so the scenes and images exist.
   or any other field, and never removes existing tags. Use this to tag media
   without a full re-sync overwriting manual edits. It always matches tags from
   text regardless of the *Auto-tag From Post Text* setting.
+- **Sync Performer** - a full re-sync scoped to a **single** performer. You don't
+  run this from the Tasks page; instead a **"Sync OnlyFans" button** is added to
+  each performer's page (via the plugin's UI JavaScript). Clicking it re-syncs
+  just that performer -- handy for fixing one creator's titles/details or
+  rebuilding their galleries without a library-wide Full Sync. The performer's
+  Stash **display name doesn't need to equal the OF username**: the plugin maps
+  the performer back to its OF username via the performer's name *and aliases*, so
+  as long as the OF username is set as the performer's name or an alias (as usual),
+  the button finds the right creator.
 - **Update Crew** - re-apply only the crew logic to ALL OnlyFans scenes and
   images: move crew-tagged people (see *Crew Tag Name*) into the Director /
   Photographer field and out of the performers list. It leaves titles, dates,
