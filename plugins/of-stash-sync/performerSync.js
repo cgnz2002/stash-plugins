@@ -6,15 +6,19 @@
 // performer's name/aliases, so the display name doesn't have to equal the
 // username.
 //
-// This is a plain DOM injector (no dependency on Stash's internal React
-// component names, which vary by version). If the button lands in an awkward
-// spot on your Stash version, tweak the selectors in `tryInject` below.
+// Patterns follow the Stash UI-plugin docs: navigation is detected with the
+// documented `stash:location` event (PluginApi.Event), the button is injected
+// into the DOM once the performer header renders (the same approach the official
+// CommunityScripts UI library's PathElementListener uses), and the task is
+// started with the `runPluginTask` mutation using `args_map`. It is
+// self-contained -- no CommunityScriptsUILibrary dependency.
 (function () {
   "use strict";
 
   var PLUGIN_ID = "of-stash-sync";
   var TASK_NAME = "Sync Performer";
   var BTN_ID = "of-sync-performer-btn";
+  var PluginApi = window.PluginApi;
 
   function performerIdFromPath() {
     var m = window.location.pathname.match(/\/performers\/(\d+)(?:\/|$)/);
@@ -79,25 +83,42 @@
     return btn;
   }
 
-  function tryInject() {
-    var performerId = performerIdFromPath();
-    if (!performerId) return; // only on a performer's page
-    if (document.getElementById(BTN_ID)) return; // already added
-
-    // Best-effort placement across common Stash performer-page layouts.
+  function inject() {
+    if (!performerIdFromPath()) return true; // not a performer page: nothing to do
+    if (document.getElementById(BTN_ID)) return true; // already added
+    // Best-effort placement across common Stash performer-page layouts. Adjust
+    // the first matching selector if the button lands in an odd spot on your
+    // Stash version.
     var host =
       document.querySelector(".detail-header .details-edit") ||
       document.querySelector(".detail-header .name-icons") ||
       document.querySelector(".performer-head") ||
       document.querySelector(".detail-header");
-    if (!host) return;
+    if (!host) return false; // header not rendered yet
     host.appendChild(makeButton());
+    return true;
   }
 
-  // Stash is a single-page app, so watch for DOM/route changes and (re)inject.
-  var observer = new MutationObserver(function () {
-    tryInject();
-  });
-  observer.observe(document.documentElement, { childList: true, subtree: true });
-  tryInject();
+  // Wait (briefly) for the performer header to render after a navigation, then
+  // inject. Mirrors PathElementListener without depending on it.
+  function injectWhenReady() {
+    var tries = 0;
+    (function attempt() {
+      if (inject()) return;
+      if (++tries > 40) return; // ~10s max, then give up until next navigation
+      setTimeout(attempt, 250);
+    })();
+  }
+
+  if (PluginApi && PluginApi.Event && PluginApi.Event.addEventListener) {
+    // Documented navigation event.
+    PluginApi.Event.addEventListener("stash:location", injectWhenReady);
+  } else {
+    // Fallback for older builds without the event: observe the DOM.
+    var observer = new MutationObserver(function () {
+      inject();
+    });
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+  }
+  injectWhenReady();
 })();
