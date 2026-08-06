@@ -1,6 +1,6 @@
 name: OnlyFans Metadata Sync
 description: Sync OF-Scraper metadata (title, details, date, URL, performers, studio) from user_data.db files into matching Stash scenes and images, and group each post's media into a gallery (linked to the post's scene).
-version: 1.8.1
+version: 1.9.0
 url: https://github.com/cgnz2002/stash-plugins
 
 settings:
@@ -43,6 +43,10 @@ exec:
 interface: raw
 errLog: error
 
+ui:
+  javascript:
+    - performerSync.js
+
 tasks:
   - name: Sync OF Metadata
     description: Sync metadata to unorganized OnlyFans scenes and images, and group each post's media into a gallery (linked to the post's scene).
@@ -60,3 +64,7 @@ tasks:
     description: Re-apply only the crew logic to ALL OnlyFans scenes and images - move director/photographer-tagged people into the director/photographer field and out of the performers list. Leaves titles, dates, studios, tags and everything else untouched. Use after tagging new performers as crew, to avoid a full re-sync.
     defaultArgs:
       mode: crew
+  - name: Sync Performer
+    description: Full re-sync of a SINGLE OnlyFans performer. Triggered by the "Sync OnlyFans" button on a performer's page (it passes the performer id); running it here without one does nothing.
+    defaultArgs:
+      mode: performer

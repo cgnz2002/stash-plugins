@@ -709,7 +709,11 @@ def main():
     server = payload.get("server_connection") or {}
     args = payload.get("args") or {}
     mode = args.get("mode")
-    full_sync = mode == "full"
+    # 'performer' is a full re-sync scoped to a single Stash performer (triggered
+    # from a performer's page). It behaves like a full sync but only for the
+    # profile(s) whose OF username matches that performer's name/aliases.
+    performer_scope = mode == "performer"
+    full_sync = mode == "full" or performer_scope
     tag_only = mode == "tag"
     crew_only = mode == "crew"
 
@@ -738,10 +742,41 @@ def main():
         log.LogError(msg)
         return msg
 
+    # Scoped performer sync: map the Stash performer back to its OF username(s)
+    # via name/aliases, so only that creator's profile is processed. Required for
+    # 'performer' mode -- with no performerId we do NOT fall back to syncing
+    # everyone (that would be the opposite of the intent).
+    scoped_usernames = None
+    if performer_scope:
+        performer_id = args.get("performerId") or args.get("performer_id")
+        if not performer_id:
+            msg = "No performer specified. Trigger 'Sync Performer' from a performer's page."
+            log.LogError(msg)
+            return msg
+        try:
+            performer = client.find_performer(performer_id)
+        except RuntimeError as e:
+            msg = "Could not look up performer {}: {}".format(performer_id, e)
+            log.LogError(msg)
+            return msg
+        if not performer:
+            msg = "Performer id {} not found in Stash.".format(performer_id)
+            log.LogError(msg)
+            return msg
+        names = [performer.get("name") or ""] + (performer.get("alias_list") or [])
+        scoped_usernames = {n.strip().lower() for n in names if n and n.strip()}
+        log.LogInfo(
+            "Scoped sync for performer '{}' (id {}). Matching OF username(s): {}".format(
+                performer.get("name"), performer_id,
+                ", ".join(sorted(scoped_usernames)) or "(none)")
+        )
+
     if tag_only:
         log.LogInfo("Starting OnlyFans tag-only pass. Data path: {}".format(data_path))
     elif crew_only:
         log.LogInfo("Starting OnlyFans crew-credit pass. Data path: {}".format(data_path))
+    elif performer_scope:
+        log.LogInfo("Starting OnlyFans scoped performer re-sync. Data path: {}".format(data_path))
     else:
         log.LogInfo(
             "Starting OnlyFans {}metadata sync. Data path: {}".format(
@@ -794,6 +829,11 @@ def main():
             continue
         try:
             profiles = db.profiles()
+            if scoped_usernames is not None:
+                profiles = [
+                    p for p in profiles
+                    if (p["username"] or "").strip().lower() in scoped_usernames
+                ]
             for profile in profiles:
                 process_profile(
                     client, db, profile, processor, studios, performers, tags,

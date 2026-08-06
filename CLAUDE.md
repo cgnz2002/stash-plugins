@@ -95,6 +95,14 @@ The four tasks are defined in the manifest and selected by `args.mode`:
   crew-tagged people out of the performers list and into the scene `director` /
   image `photographer` field, leaving every other field untouched. Skips media
   that already match, and never creates performers (even with auto-create on).
+- `mode: performer` — a full re-sync scoped to one Stash performer. Requires a
+  `performerId` arg (does nothing without it, so it never falls back to syncing
+  everyone). It resolves that performer's name + `alias_list` and only processes
+  the `user_data.db` profile whose OF username matches — bridging the usual
+  display-name≠username gap. Triggered by the **"Sync OnlyFans" button** that the
+  plugin's UI JavaScript (`performerSync.js`, wired via the manifest `ui:` block)
+  injects on each performer page; the button calls the `runPluginTask` mutation
+  with `{mode: performer, performerId}`.
 
 ## Architecture notes
 
