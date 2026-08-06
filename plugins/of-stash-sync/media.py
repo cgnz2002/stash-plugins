@@ -30,8 +30,11 @@ _MENTION_RE = re.compile(
     r"(?:^|\s|>)@([\w\-]+(?:\.[\w\-]+)*)(?=[\s\.\?\!…<,:;]|$)"
 )
 
-_BR_RE = re.compile(r"<br\s*/?>", flags=re.IGNORECASE)
 _TAG_RE = re.compile(r"<[^>]+>")
+# Block-level boundaries that should become line breaks so text either side of
+# them (e.g. a headline paragraph and a body paragraph) is not glued together.
+_BLOCK_BREAK_RE = re.compile(r"<br\s*/?>|</p\s*>|</div\s*>|</h[1-6]\s*>", flags=re.IGNORECASE)
+_MULTI_NEWLINE_RE = re.compile(r"\n{2,}")
 
 # Separator/boundary patterns mirroring Stash's auto-tag matcher
 # (pkg/match/path.go): a space in a name matches any run of separator
@@ -63,9 +66,13 @@ class MediaProcessor:
         self.max_title_length = max_title_length
 
     def remove_html_tags(self, text):
-        text = text.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
+        # Turn block boundaries (br, closing p/div/heading) into newlines first
+        # so words on either side are not concatenated, then strip the remaining
+        # (inline) tags and unescape entities.
+        text = _BLOCK_BREAK_RE.sub("\n", text)
         text = _TAG_RE.sub("", text)
-        return html.unescape(text)
+        text = html.unescape(text)
+        return _MULTI_NEWLINE_RE.sub("\n", text).strip()
 
     def truncate_title(self, title, max_length):
         if len(title) <= max_length:
@@ -84,10 +91,16 @@ class MediaProcessor:
         return title[:title_end]
 
     def process_text(self, text):
-        """Return (title, details) for a piece of post text."""
-        parts = _BR_RE.split(text, maxsplit=1)
-        title = self.remove_html_tags(parts[0])
-        details = self.remove_html_tags(text)
+        """Return (title, details) for a piece of post text.
+
+        The title is the first line (a headline paragraph, or the text before the
+        first break); details is the full cleaned text. remove_html_tags
+        normalises block boundaries to newlines so a headline and body are not
+        concatenated.
+        """
+        cleaned = self.remove_html_tags(text)
+        title = cleaned.split("\n", 1)[0].strip()
+        details = cleaned
         if len(title) > self.max_title_length:
             title = self.truncate_title(title, self.max_title_length)
         if title == details:
