@@ -1,6 +1,6 @@
 name: OnlyFans Metadata Sync
 description: Sync OF-Scraper metadata (title, details, date, URL, performers, studio) from user_data.db files into matching Stash scenes and images, and group each post's media into a gallery (linked to the post's scene).
-version: 1.9.0
+version: 1.10.0
 url: https://github.com/cgnz2002/stash-plugins
 
 settings:
@@ -23,6 +23,10 @@ settings:
   autoCreatePerformers:
     displayName: Create Missing Performers
     description: "When on, create a sparse performer for the creator (and any unmatched @mentions in the post text) instead of skipping. Default off."
+    type: BOOLEAN
+  keepManualEdits:
+    displayName: Keep Manual Performers & Tags
+    description: "When on, sync is non-destructive to performers and tags: it MERGES them instead of replacing, so anything you added by hand stays, while the post's creator/@mentions and tags are added alongside. Everything else (title, details, date, studio, URL) is still updated. Crew-tagged people are still moved out of the performers list on scenes/images. Turn this on so a Full Sync (or the per-performer button) doesn't wipe manual performers/tags. Default off (a full sync replaces the performer and tag lists)."
     type: BOOLEAN
   autoTagFromText:
     displayName: Auto-tag From Post Text
