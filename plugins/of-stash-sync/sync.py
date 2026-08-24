@@ -9,6 +9,8 @@ import base64
 import json
 import os
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 import log
 from stash import StashClient
@@ -23,6 +25,56 @@ DEFAULT_MAX_TITLE_LENGTH = 65
 # Tag added to every synced scene, image and gallery so all OnlyFans media is
 # filterable by one tag. Created on first use if missing.
 DEFAULT_SITE_TAG = "OnlyFans"
+DEFAULT_WORKERS = 4
+
+
+def _run_write_task(fn):
+    """Run a single write task (a callable returning a counters dict). Retries a
+    couple of times on transient errors -- Stash is SQLite-backed, so parallel
+    writes can briefly hit 'database is locked'. Never raises: logs and returns
+    {} on failure so one bad write doesn't sink the batch."""
+    for attempt in range(3):
+        try:
+            return fn() or {}
+        except RuntimeError as e:
+            msg = str(e).lower()
+            transient = "lock" in msg or "timeout" in msg or "connection" in msg
+            if attempt < 2 and transient:
+                time.sleep(0.2 * (attempt + 1))
+                continue
+            log.LogError("  write failed: {}".format(e))
+            return {}
+        except Exception as e:  # never let a worker thread crash the batch
+            log.LogError("  write failed: {}".format(e))
+            return {}
+
+
+def _media_task(client, kind, update):
+    """A write task that applies one scene/image update. All resolution is
+    already baked into `update`, so this only performs the mutation."""
+    def task():
+        if kind == "scene":
+            client.update_scene(update)
+            return {"scenes": 1}
+        client.update_image(update)
+        return {"images": 1}
+    return task
+
+
+def run_writes(tasks, workers, totals):
+    """Execute write tasks, in parallel when workers > 1, and fold their counter
+    dicts into `totals`. Resolution/lookups must already be done (tasks only
+    perform Stash mutations) so there are no shared-cache races."""
+    if not tasks:
+        return
+    if workers and workers > 1 and len(tasks) > 1:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            results = list(ex.map(_run_write_task, tasks))
+    else:
+        results = [_run_write_task(t) for t in tasks]
+    for r in results:
+        for key, value in (r or {}).items():
+            totals[key] = totals.get(key, 0) + value
 
 
 def get_setting(config, key, default):
@@ -48,6 +100,40 @@ class PerformerResolver:
         self.cache = {}
         # username -> {"roles": set(), "name": str} for the crew-credit logic
         self.info_cache = {}
+        # lowercase name/alias -> [performers]; built once from a single bulk
+        # fetch so the common "performer exists" path needs no per-username query.
+        self._index = None
+
+    def _ensure_index(self):
+        if self._index is not None:
+            return
+        self._index = {}
+        for performer in self.client.find_all_performers():
+            keys = [performer.get("name") or ""] + (performer.get("alias_list") or [])
+            for key in keys:
+                key = key.strip().lower()
+                if key:
+                    self._index.setdefault(key, []).append(performer)
+
+    def _exact(self, username):
+        """Performers whose name or an alias equals the username (from the index)."""
+        self._ensure_index()
+        out, seen = [], set()
+        for performer in self._index.get(username.strip().lower(), []):
+            if performer["id"] not in seen:
+                seen.add(performer["id"])
+                out.append(performer)
+        return out
+
+    def _register(self, performer):
+        """Add a newly created performer to the index so later lookups find it."""
+        if self._index is None:
+            return
+        keys = [performer.get("name") or ""] + (performer.get("alias_list") or [])
+        for key in keys:
+            key = key.strip().lower()
+            if key:
+                self._index.setdefault(key, []).append(performer)
 
     def creator_credit(self, username):
         """Return (roles, name) for a creator: its crew roles (empty, or both
@@ -63,8 +149,9 @@ class PerformerResolver:
         key = username.lower()
         if key in self.cache:
             return self.cache[key]
-        result = self.client.find_performers_by_name(username)
-        exact = result["exact"]
+        # Exact match from the in-memory index (no query). Only the auto-create
+        # path below falls back to a live query for the near-match logic.
+        exact = self._exact(username)
         ids = [p["id"] for p in exact]
         # A single crew tag credits the performer to both the scene director and
         # the image photographer field (each applies on its own media type), so
@@ -86,8 +173,10 @@ class PerformerResolver:
             # Stash treats EQUALS as a SQL LIKE, so a username containing '_'
             # (a wildcard) can collide with an existing performer name on
             # create. If Stash already has such a near-match, attach it instead
-            # of trying to create a duplicate (which Stash would reject).
-            near = result["name_like"]
+            # of trying to create a duplicate (which Stash would reject). This
+            # near-match uses Stash's real LIKE semantics, so only this rare
+            # create path falls back to a live query.
+            near = self.client.find_performers_by_name(username)["name_like"]
             if len(near) == 1:
                 ids = [near[0]["id"]]
                 log.LogInfo(
@@ -106,6 +195,7 @@ class PerformerResolver:
                 new_id = self.client.create_performer(username, of_url(username))
                 if new_id:
                     ids = [new_id]
+                    self._register({"id": new_id, "name": username, "alias_list": [], "tags": []})
                     source = " (from @mention)" if from_mention else ""
                     log.LogInfo("Created performer '{}'{}".format(username, source))
         self.cache[key] = ids
@@ -118,12 +208,21 @@ class StudioResolver:
         self.parent_id = parent_id
         self.icon = icon_data_url
         self.cache = {}
+        self._map = None  # lowercase studio name -> id, built once
+
+    def _ensure_map(self):
+        if self._map is not None:
+            return
+        self._map = {}
+        for studio in self.client.find_all_studios():
+            self._map[(studio.get("name") or "").strip().lower()] = studio["id"]
 
     def resolve(self, username):
         if username in self.cache:
             return self.cache[username]
+        self._ensure_map()
         name = "{} (OnlyFans)".format(username)
-        studio_id = self.client.find_studio(name)
+        studio_id = self._map.get(name.strip().lower())
         if not studio_id:
             studio_id = self.client.create_studio(
                 name,
@@ -132,6 +231,8 @@ class StudioResolver:
                 "Sub Studio for OnlyFans content creator",
                 self.icon,
             )
+            if studio_id:
+                self._map[name.strip().lower()] = studio_id
             log.LogInfo("Created studio '{}'".format(name))
         self.cache[username] = studio_id
         return studio_id
@@ -451,24 +552,27 @@ def _gallery_meta(db, processor, profile, post_id, group, performers, tags,
 
 def build_post_galleries(client, db, profile, processor, performers, tags,
                          tag_matcher, studio_id, creator_ids, creator_roles,
-                         creator_name, full_sync, keep_manual_edits, totals):
+                         creator_name, full_sync, keep_manual_edits, workers,
+                         all_scenes, all_images, totals):
     """Group a creator's media by post and make one gallery per post.
 
     A gallery is created when a post has 2+ images, or an image alongside a video
     (Stash relates scenes to galleries, not to images, so the gallery carries the
     scene link). Galleries are keyed by the post URL: a plain sync creates missing
     ones and adds images; a full sync also refreshes their metadata.
+
+    ``all_scenes``/``all_images`` are the creator's media already fetched by
+    process_profile (organized included), reused here instead of re-querying.
     """
     user_id = profile["user_id"]
-    username = profile["username"]
 
     # filename -> (kind, stash id), organized media included, so a gallery holds
     # all of a post's media regardless of the sync/full mode.
     index = {}
-    for scene in client.find_scenes(username, True):
+    for scene in all_scenes:
         for f in scene.get("files") or []:
             index[os.path.basename(f["path"])] = ("scene", scene["id"])
-    for image in client.find_images(username, True):
+    for image in all_images:
         for vf in image.get("visual_files") or []:
             basename = vf.get("basename")
             if basename:
@@ -499,6 +603,10 @@ def build_post_galleries(client, db, profile, processor, performers, tags,
             for u in gal.get("urls") or []:
                 by_url[u] = gal
 
+    username = profile["username"]
+    # Resolve everything sequentially (no cache races), collecting one write task
+    # per gallery; the tasks (create/update + attach images) run in parallel.
+    tasks = []
     for post_id, group in groups.items():
         images, scenes = group["images"], group["scenes"]
         # 2+ images, or an image alongside a video.
@@ -508,48 +616,56 @@ def build_post_galleries(client, db, profile, processor, performers, tags,
             continue
         url = "https://www.onlyfans.com/{}/{}".format(post_id, username)
         existing = by_url.get(url)
-        try:
-            if existing:
-                if full_sync:
-                    gallery_input, _title = _gallery_meta(
-                        db, processor, profile, post_id, group, performers, tags,
-                        tag_matcher, studio_id, creator_ids, creator_roles,
-                        creator_name, url, scenes,
-                    )
-                    # Non-destructive mode: keep performers and tags already on
-                    # the gallery.
-                    if keep_manual_edits:
-                        merged = list(gallery_input["performer_ids"])
-                        for p in existing.get("performers") or []:
-                            if p["id"] not in merged:
-                                merged.append(p["id"])
-                        gallery_input["performer_ids"] = merged
-                        merged_tags = list(gallery_input.get("tag_ids") or [])
-                        for t in existing.get("tags") or []:
-                            if t["id"] not in merged_tags:
-                                merged_tags.append(t["id"])
-                        gallery_input["tag_ids"] = merged_tags
-                    gallery_input["id"] = existing["id"]
-                    client.update_gallery(gallery_input)
-                client.add_gallery_images(existing["id"], images)
-            else:
-                gallery_input, title = _gallery_meta(
+        if existing:
+            gallery_input = None
+            if full_sync:
+                gallery_input, _title = _gallery_meta(
                     db, processor, profile, post_id, group, performers, tags,
                     tag_matcher, studio_id, creator_ids, creator_roles,
                     creator_name, url, scenes,
                 )
-                gid = client.create_gallery(gallery_input)
+                # Non-destructive mode: keep performers and tags already there.
+                if keep_manual_edits:
+                    merged = list(gallery_input["performer_ids"])
+                    for p in existing.get("performers") or []:
+                        if p["id"] not in merged:
+                            merged.append(p["id"])
+                    gallery_input["performer_ids"] = merged
+                    merged_tags = list(gallery_input.get("tag_ids") or [])
+                    for t in existing.get("tags") or []:
+                        if t["id"] not in merged_tags:
+                            merged_tags.append(t["id"])
+                    gallery_input["tag_ids"] = merged_tags
+                gallery_input["id"] = existing["id"]
+
+            def _update_task(gi=gallery_input, gid=existing["id"], imgs=list(images)):
+                if gi is not None:
+                    client.update_gallery(gi)
+                client.add_gallery_images(gid, imgs)
+                return {"galleries": 1}
+            tasks.append(_update_task)
+        else:
+            gallery_input, title = _gallery_meta(
+                db, processor, profile, post_id, group, performers, tags,
+                tag_matcher, studio_id, creator_ids, creator_roles,
+                creator_name, url, scenes,
+            )
+
+            def _create_task(gi=gallery_input, imgs=list(images), t=title,
+                             has_scene=bool(scenes)):
+                gid = client.create_gallery(gi)
                 if not gid:
-                    continue
-                client.add_gallery_images(gid, images)
+                    return {}
+                client.add_gallery_images(gid, imgs)
                 log.LogInfo("Created gallery '{}' ({} image(s){})".format(
-                    title, len(images), ", linked scene" if scenes else ""))
-            totals["galleries"] += 1
-        except RuntimeError as e:
-            log.LogError("  Failed gallery for post {}: {}".format(post_id, e))
+                    t, len(imgs), ", linked scene" if has_scene else ""))
+                return {"galleries": 1}
+            tasks.append(_create_task)
+
+    run_writes(tasks, workers, totals)
 
 
-def tag_post_galleries(client, db, profile, processor, tags, tag_matcher, totals):
+def tag_post_galleries(client, db, profile, processor, tags, tag_matcher, workers, totals):
     """Additive tag pass over the creator's per-post galleries: merge in the
     OnlyFans (plus paid/archived/text) tags, leaving every other gallery field
     untouched. Used by the tag task, which otherwise doesn't touch galleries.
@@ -559,6 +675,7 @@ def tag_post_galleries(client, db, profile, processor, tags, tag_matcher, totals
     studio_id = client.find_studio("{} (OnlyFans)".format(username))
     if not studio_id:
         return
+    tasks = []
     for gal in client.find_galleries_for_studio(studio_id):
         # Recover the post id from the gallery url (.../<post_id>/<username>).
         post_id = None
@@ -581,16 +698,17 @@ def tag_post_galleries(client, db, profile, processor, tags, tag_matcher, totals
                 added += 1
         if added == 0:
             continue
-        try:
-            client.update_gallery({"id": gal["id"], "tag_ids": merged})
-            totals["galleries"] += 1
-        except RuntimeError as e:
-            log.LogError("  Failed to tag gallery {}: {}".format(gal["id"], e))
+
+        def _tag_task(gid=gal["id"], tag_ids=merged):
+            client.update_gallery({"id": gid, "tag_ids": tag_ids})
+            return {"galleries": 1}
+        tasks.append(_tag_task)
+    run_writes(tasks, workers, totals)
 
 
 def process_profile(client, db, profile, processor, studios, performers, tags,
                     tag_matcher, full_sync, tag_only, crew_only, multiple_ok,
-                    skip_multi_file, keep_manual_edits, totals):
+                    skip_multi_file, keep_manual_edits, workers, totals):
     user_id = profile["user_id"]
     username = profile["username"]
     log.LogInfo("Processing {} (user_id {})".format(username, user_id))
@@ -636,10 +754,17 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
     skip_multi = skip_multi_file and not tag_only
 
     include_all = full_sync or tag_only or crew_only
+    # Fetch the creator's media once (organized included) and reuse it for the
+    # gallery pass too. The plain sync only *processes* unorganized media, so
+    # organized items are skipped when building the update map (but still count
+    # toward galleries).
+    all_scenes = client.find_scenes(username, True)
+    all_images = client.find_images(username, True)
     media_map = {}
     skipped_multi = 0
-    scenes = client.find_scenes(username, include_all)
-    for scene in scenes:
+    for scene in all_scenes:
+        if not include_all and scene.get("organized"):
+            continue
         files = scene.get("files") or []
         if skip_multi and len(files) > 1:
             skipped_multi += 1
@@ -652,8 +777,9 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
         )
         for f in files:
             media_map[os.path.basename(f["path"])] = entry
-    images = client.find_images(username, include_all)
-    for image in images:
+    for image in all_images:
+        if not include_all and image.get("organized"):
+            continue
         visual_files = image.get("visual_files") or []
         if skip_multi and len(visual_files) > 1:
             skipped_multi += 1
@@ -669,7 +795,7 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
             if basename:
                 media_map[basename] = entry
     log.LogInfo(
-        "  {} scenes, {} images to consider".format(len(scenes), len(images))
+        "  {} scenes, {} images".format(len(all_scenes), len(all_images))
     )
     if skipped_multi:
         totals["skipped_multifile"] += skipped_multi
@@ -677,6 +803,9 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
             "  Skipped {} multi-file scene(s)/image(s)".format(skipped_multi)
         )
 
+    # Resolve everything sequentially (no cache races), collecting one write task
+    # per media; the update mutations then run in parallel.
+    media_tasks = []
     for basename, (kind, stash_id, existing_tags, existing_perf, existing_credit) in media_map.items():
         media_row = db.media_by_filename(user_id, basename)
         if not media_row:
@@ -690,7 +819,6 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
             if update is None:
                 totals["skipped"] += 1
                 continue
-            label = "+{} tags".format(added)
         elif crew_only:
             update, label = build_crew_only_update(
                 db, processor, media_row, performer_ids, creator_roles,
@@ -706,27 +834,20 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
                 existing_perf, existing_tags, keep_manual_edits,
             )
         update["id"] = stash_id
-        try:
-            if kind == "scene":
-                client.update_scene(update)
-                totals["scenes"] += 1
-            else:
-                client.update_image(update)
-                totals["images"] += 1
-            log.LogDebug("  {} <- {}: {}".format(kind, username, str(label)[:60]))
-        except RuntimeError as e:
-            log.LogError("  Failed to update {} {}: {}".format(kind, stash_id, e))
+        media_tasks.append(_media_task(client, kind, update))
+    run_writes(media_tasks, workers, totals)
 
     # Galleries: the sync/full passes build (and metadata-sync) per-post
     # galleries; the tag pass additively tags the existing ones; the crew pass
     # leaves galleries alone.
     if tag_only:
-        tag_post_galleries(client, db, profile, processor, tags, tag_matcher, totals)
+        tag_post_galleries(client, db, profile, processor, tags, tag_matcher,
+                           workers, totals)
     elif not crew_only:
         build_post_galleries(
             client, db, profile, processor, performers, tags, tag_matcher,
             studio_id, performer_ids, creator_roles, creator_name, full_sync,
-            keep_manual_edits, totals,
+            keep_manual_edits, workers, all_scenes, all_images, totals,
         )
 
 
@@ -768,6 +889,11 @@ def main():
     skip_multi_file = bool(get_setting(config, "skipMultiFile", False))
     crew_tag_id = get_setting(config, "crewTagId", "")
     keep_manual_edits = bool(get_setting(config, "keepManualEdits", False))
+    try:
+        workers = int(get_setting(config, "syncWorkers", DEFAULT_WORKERS))
+    except (TypeError, ValueError):
+        workers = DEFAULT_WORKERS
+    workers = max(1, min(workers, 16))  # clamp: 1 = sequential, cap concurrency
 
     if not data_path:
         msg = "No data path configured. Set 'OF-Scraper Data Path' in the plugin settings."
@@ -828,7 +954,8 @@ def main():
             return msg
 
     databases = OFDatabase.find_databases(data_path)
-    log.LogInfo("Found {} user_data.db file(s)".format(len(databases)))
+    log.LogInfo("Found {} user_data.db file(s){}".format(
+        len(databases), "" if workers <= 1 else " ({} parallel writers)".format(workers)))
     if not databases:
         log.LogWarning("No user_data.db files found under {}".format(data_path))
         return
@@ -870,7 +997,7 @@ def main():
                 process_profile(
                     client, db, profile, processor, studios, performers, tags,
                     tag_matcher, full_sync, tag_only, crew_only, multiple_ok,
-                    skip_multi_file, keep_manual_edits, totals,
+                    skip_multi_file, keep_manual_edits, workers, totals,
                 )
         except Exception as e:
             log.LogError("Error processing {}: {}".format(db_path, e))
