@@ -1,6 +1,6 @@
 name: OnlyFans Metadata Sync
 description: Sync OF-Scraper metadata (title, details, date, URL, performers, studio) from user_data.db files into matching Stash scenes and images, and group each post's media into a gallery (linked to the post's scene).
-version: 1.11.0
+version: 1.11.1
 url: https://github.com/cgnz2002/stash-plugins
 
 settings:
@@ -38,7 +38,7 @@ settings:
     type: BOOLEAN
   syncWorkers:
     displayName: Sync Workers
-    description: "How many scene/image/gallery writes to send to Stash in parallel. Higher is faster on large libraries; set to 1 for the original one-at-a-time behaviour if you ever see 'database is locked' errors. Range 1-16. Default 4."
+    description: "How many scene/image/gallery writes to send to Stash in parallel. Higher is faster on large libraries. Parallel writes are retried automatically if Stash's SQLite briefly reports 'database is locked' or a 'FOREIGN KEY constraint failed' contention race; if such errors persist in the log, lower this (or set 1 for the original one-at-a-time behaviour). Range 1-16. Default 4."
     type: NUMBER
   crewTagId:
     displayName: Crew Tag ID
