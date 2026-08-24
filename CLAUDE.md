@@ -125,6 +125,15 @@ The four tasks are defined in the manifest and selected by `args.mode`:
   `TagTextMatcher` each cache lookups and create-if-missing where appropriate.
   Updates are routed by where the media actually lives in Stash
   (scene -> `sceneUpdate`, image -> `imageUpdate`).
+- **Performance** — resolvers bulk-fetch **all** performers/studios once into
+  in-memory maps (`find_all_performers`/`find_all_studios`), so username->performer
+  resolution is a dict hit, not two queries per name (a live query only for the
+  rare auto-create near-match). Each creator's scenes/images are fetched **once**
+  (organized included; plain sync filters organized in code) and reused for the
+  gallery pass. Writes (scene/image/gallery mutations) run through a thread pool
+  (`run_writes`, `Sync Workers` setting, default 4, 1 = sequential) with
+  retry-on-lock; **all resolution happens sequentially first**, so only stateless
+  mutations run concurrently (no shared-cache races, Stash's SQLite stays happy).
 - **Non-destructive sync** — by default a sync/full pass *replaces* a media's
   `performer_ids` and `tag_ids` with the post's derived values, so a Full Sync
   drops manually-added performers/tags. The **Keep Manual Performers & Tags**

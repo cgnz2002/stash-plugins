@@ -123,6 +123,31 @@ class StashClient:
                 seen.add(performer["id"])
         return {"exact": exact, "name_like": name_like}
 
+    def find_all_performers(self):
+        """Every performer (id, name, alias_list, tags), fetched once so username
+        -> performer resolution can be done in memory instead of two queries per
+        unique username."""
+        query = """
+        query AllPerformers {
+            findPerformers(filter: { per_page: -1 }) {
+                performers { id name alias_list tags { id } }
+            }
+        }
+        """
+        return self.call(query)["findPerformers"]["performers"]
+
+    def find_all_studios(self):
+        """Every studio (id, name), fetched once so the per-creator studio lookup
+        is an in-memory map hit instead of a query each."""
+        query = """
+        query AllStudios {
+            findStudios(filter: { per_page: -1 }) {
+                studios { id name }
+            }
+        }
+        """
+        return self.call(query)["findStudios"]["studios"]
+
     def find_performer(self, performer_id):
         """Return {'name', 'alias_list'} for a performer id, or None. Used to map
         a Stash performer back to its OF username: the username is the performer's
@@ -194,7 +219,7 @@ class StashClient:
         query = """
         query FindScenes($f: SceneFilterType!) {
             findScenes(scene_filter: $f, filter: { per_page: -1 }) {
-                scenes { id tags { id } performers { id } director files { path basename } }
+                scenes { id organized tags { id } performers { id } director files { path basename } }
             }
         }
         """
@@ -209,6 +234,7 @@ class StashClient:
             findImages(image_filter: $f, filter: { per_page: -1 }) {
                 images {
                     id
+                    organized
                     tags { id }
                     performers { id }
                     photographer
