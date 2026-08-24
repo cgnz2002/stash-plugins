@@ -125,6 +125,13 @@ The four tasks are defined in the manifest and selected by `args.mode`:
   `TagTextMatcher` each cache lookups and create-if-missing where appropriate.
   Updates are routed by where the media actually lives in Stash
   (scene -> `sceneUpdate`, image -> `imageUpdate`).
+- **Non-destructive sync** — by default a sync/full pass *replaces* a media's
+  `performer_ids` and `tag_ids` with the post's derived values, so a Full Sync
+  drops manually-added performers/tags. The **Keep Manual Performers & Tags**
+  setting (`keepManualEdits`) makes `build_update`/`build_post_galleries` *merge*
+  both instead: existing performers and tags are kept and the post's ones added
+  alongside; crew ids are still removed on scenes/images so the crew feature keeps
+  working. Everything else (title, details, date, studio, url) is still updated.
 - **Crew credit** — a performer carrying the configured *Crew Tag* (matched by
   **tag id**, not name, so renames don't break it) is treated as crew:
   `collect_crew` credits them in the scene

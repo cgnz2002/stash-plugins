@@ -322,7 +322,9 @@ def build_crew_only_update(db, processor, media_row, creator_ids, creator_roles,
 
 
 def build_update(db, processor, profile, media_row, creator_ids, studio_id,
-                 resolver, tags, tag_matcher, kind, creator_roles, creator_name):
+                 resolver, tags, tag_matcher, kind, creator_roles, creator_name,
+                 existing_performer_ids=None, existing_tag_ids=None,
+                 keep_manual_edits=False):
     username = profile["username"]
     post_id = media_row["post_id"]
     filename = media_row["filename"]
@@ -331,7 +333,7 @@ def build_update(db, processor, profile, media_row, creator_ids, studio_id,
     meta = db.post_meta(post_id)
     text = meta["text"] if (meta and meta["text"]) else ""
 
-    director_names, photographer_names, _crew_ids, mention_performer_ids = collect_crew(
+    director_names, photographer_names, crew_ids, mention_performer_ids = collect_crew(
         processor, resolver, text, creator_roles, creator_name, creator_ids
     )
 
@@ -349,10 +351,24 @@ def build_update(db, processor, profile, media_row, creator_ids, studio_id,
     for pid in mention_performer_ids:
         if pid not in performer_ids:
             performer_ids.append(pid)
+    # Non-destructive mode: keep any performers already on the media (e.g. ones
+    # you added by hand) instead of replacing the list. Crew-tagged people are
+    # still pulled out (crew_ids), so the crew feature keeps working.
+    if keep_manual_edits and existing_performer_ids:
+        for pid in existing_performer_ids:
+            if pid not in performer_ids:
+                performer_ids.append(pid)
+        performer_ids = [pid for pid in performer_ids if pid not in crew_ids]
     if not performer_ids:
         performer_ids = list(creator_ids)
 
     tag_ids = collect_tag_ids(processor, meta, text, tags, tag_matcher)
+    # Non-destructive mode: keep any tags already on the media (manual tags)
+    # instead of replacing the list; the post's tags are added alongside.
+    if keep_manual_edits and existing_tag_ids:
+        for tid in existing_tag_ids:
+            if tid not in tag_ids:
+                tag_ids.append(tid)
 
     update = {
         "title": title,
@@ -435,7 +451,7 @@ def _gallery_meta(db, processor, profile, post_id, group, performers, tags,
 
 def build_post_galleries(client, db, profile, processor, performers, tags,
                          tag_matcher, studio_id, creator_ids, creator_roles,
-                         creator_name, full_sync, totals):
+                         creator_name, full_sync, keep_manual_edits, totals):
     """Group a creator's media by post and make one gallery per post.
 
     A gallery is created when a post has 2+ images, or an image alongside a video
@@ -481,7 +497,7 @@ def build_post_galleries(client, db, profile, processor, performers, tags,
     if studio_id:
         for gal in client.find_galleries_for_studio(studio_id):
             for u in gal.get("urls") or []:
-                by_url[u] = gal["id"]
+                by_url[u] = gal
 
     for post_id, group in groups.items():
         images, scenes = group["images"], group["scenes"]
@@ -500,9 +516,22 @@ def build_post_galleries(client, db, profile, processor, performers, tags,
                         tag_matcher, studio_id, creator_ids, creator_roles,
                         creator_name, url, scenes,
                     )
-                    gallery_input["id"] = existing
+                    # Non-destructive mode: keep performers and tags already on
+                    # the gallery.
+                    if keep_manual_edits:
+                        merged = list(gallery_input["performer_ids"])
+                        for p in existing.get("performers") or []:
+                            if p["id"] not in merged:
+                                merged.append(p["id"])
+                        gallery_input["performer_ids"] = merged
+                        merged_tags = list(gallery_input.get("tag_ids") or [])
+                        for t in existing.get("tags") or []:
+                            if t["id"] not in merged_tags:
+                                merged_tags.append(t["id"])
+                        gallery_input["tag_ids"] = merged_tags
+                    gallery_input["id"] = existing["id"]
                     client.update_gallery(gallery_input)
-                client.add_gallery_images(existing, images)
+                client.add_gallery_images(existing["id"], images)
             else:
                 gallery_input, title = _gallery_meta(
                     db, processor, profile, post_id, group, performers, tags,
@@ -561,7 +590,7 @@ def tag_post_galleries(client, db, profile, processor, tags, tag_matcher, totals
 
 def process_profile(client, db, profile, processor, studios, performers, tags,
                     tag_matcher, full_sync, tag_only, crew_only, multiple_ok,
-                    skip_multi_file, totals):
+                    skip_multi_file, keep_manual_edits, totals):
     user_id = profile["user_id"]
     username = profile["username"]
     log.LogInfo("Processing {} (user_id {})".format(username, user_id))
@@ -674,6 +703,7 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
             update, label = build_update(
                 db, processor, profile, media_row, performer_ids, studio_id,
                 performers, tags, tag_matcher, kind, creator_roles, creator_name,
+                existing_perf, existing_tags, keep_manual_edits,
             )
         update["id"] = stash_id
         try:
@@ -695,7 +725,8 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
     elif not crew_only:
         build_post_galleries(
             client, db, profile, processor, performers, tags, tag_matcher,
-            studio_id, performer_ids, creator_roles, creator_name, full_sync, totals,
+            studio_id, performer_ids, creator_roles, creator_name, full_sync,
+            keep_manual_edits, totals,
         )
 
 
@@ -736,6 +767,7 @@ def main():
     auto_tag_from_text = bool(get_setting(config, "autoTagFromText", False))
     skip_multi_file = bool(get_setting(config, "skipMultiFile", False))
     crew_tag_id = get_setting(config, "crewTagId", "")
+    keep_manual_edits = bool(get_setting(config, "keepManualEdits", False))
 
     if not data_path:
         msg = "No data path configured. Set 'OF-Scraper Data Path' in the plugin settings."
@@ -838,7 +870,7 @@ def main():
                 process_profile(
                     client, db, profile, processor, studios, performers, tags,
                     tag_matcher, full_sync, tag_only, crew_only, multiple_ok,
-                    skip_multi_file, totals,
+                    skip_multi_file, keep_manual_edits, totals,
                 )
         except Exception as e:
             log.LogError("Error processing {}: {}".format(db_path, e))

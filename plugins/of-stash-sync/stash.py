@@ -254,7 +254,7 @@ class StashClient:
         query = """
         query FindGalleries($f: GalleryFilterType!) {
             findGalleries(gallery_filter: $f, filter: { per_page: -1 }) {
-                galleries { id urls tags { id } }
+                galleries { id urls tags { id } performers { id } }
             }
         }
         """
