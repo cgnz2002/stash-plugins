@@ -118,7 +118,12 @@ The four tasks are defined in the manifest and selected by `args.mode`:
   the date in `created_at` instead of `posted_at`, and leave `profiles` empty
   (the creator name is then recovered from `medias.directory`).
 - **`MediaProcessor` (media.py)** — turns post text into title/details, parses
-  `@mentions`, derives studio code from filename, formats dates. Tag matching
+  collaborator credits, derives studio code from filename, formats dates.
+  `parse_mentions` picks up both `@mentions` **and** bare profile links
+  (`onlyfans.com/<username>`), because creators sometimes credit a collaborator
+  by URL instead of an @mention; the post-id URL form
+  `onlyfans.com/<postid>/<username>` is excluded by skipping purely-numeric
+  first segments. Tag matching
   (`compile_name_pattern`) mirrors Stash's own auto-tagger
   (separator-insensitive, word-bounded, case-insensitive).
 - **sync.py resolvers** — `PerformerResolver`, `StudioResolver`, `TagResolver`,
@@ -145,7 +150,7 @@ The four tasks are defined in the manifest and selected by `args.mode`:
   **tag id**, not name, so renames don't break it) is treated as crew:
   `collect_crew` credits them in the scene
   `director` / image `photographer` field instead of the performers list, for
-  both the creator and any @mentioned collaborator. The creator is still added
+  both the creator and any collaborator credited by @mention or profile URL. The creator is still added
   as a performer when a post credits only crew (so media is never
   performer-less), and the **studio always follows the source db**, never the
   credited director. `build_update` applies this during sync; `build_crew_only_update`

@@ -21,7 +21,9 @@ creator profile in it:
   file back to the OF-Scraper database by filename.
 - Sets **title** and **details** from the post text, **date** from the OF post
   date, **studio**, **code** (OF media id), **URL** to the original post, and
-  **performers** (the creator plus any `@mentioned` accounts).
+  **performers** (the creator plus any collaborators credited in the post text,
+  whether `@mentioned` or linked by a bare profile URL like
+  `onlyfans.com/username`).
 - Credits anyone tagged as **crew** (see *Crew Tag Name*) in the scene
   **Director** / image **Photographer** field instead of the performers list.
 - Groups each post's media into a **gallery** (see below).
@@ -74,7 +76,7 @@ Both current and older OF-Scraper database layouts are supported.
 | Sync Workers | `4` | How many scene/image/gallery writes to send to Stash in parallel. Higher is faster on large libraries; set to `1` for the original one-at-a-time behaviour if you ever see "database is locked" errors. Range 1–16. |
 | Auto-tag From Post Text | off | Scan each post's text and attach any existing Stash tags whose name or alias appears in it. |
 | Skip Multi-file Scenes and Images | off | Sync and Full Sync skip any scene or image with more than one file (e.g. merged scenes), to protect their performers and metadata. Does not affect the Tag task. |
-| Crew Tag ID | (empty) | The Stash tag **ID** (from the tag's URL, e.g. `.../tags/42` → `42`) marking crew performers. A performer with this tag has their name put in each scene's Director field and each image's Photographer field instead of the performers list. Applies to the creator and any `@mentioned` collaborator. Empty disables crew handling. |
+| Crew Tag ID | (empty) | The Stash tag **ID** (from the tag's URL, e.g. `.../tags/42` → `42`) marking crew performers. A performer with this tag has their name put in each scene's Director field and each image's Photographer field instead of the performers list. Applies to the creator and any collaborator credited by `@mention` or profile URL (`onlyfans.com/username`). Empty disables crew handling. |
 
 ## Tasks
 
@@ -116,8 +118,10 @@ URL (e.g. `.../tags/42` → `42`), set that as the *Crew Tag ID*, and apply the
 tag to their performer. On any sync or the **Update Crew** task the plugin then
 puts their name in the scene **Director** and image **Photographer** fields
 instead of adding them as a performer. This applies both to the creator whose
-database is being read and to anyone they `@mention` (e.g. a guest director on a
-performer's own page). Matching is by tag ID, so you can rename the tag freely.
+database is being read and to anyone they credit as a collaborator (e.g. a guest
+director on a performer's own page), whether by `@mention` or by a bare profile
+URL such as `onlyfans.com/username`. Matching is by tag ID, so you can rename the
+tag freely.
 The studio always follows where the media was sourced from, and if a post
 credits only crew the creator is still added as a performer so the media is
 never left empty.

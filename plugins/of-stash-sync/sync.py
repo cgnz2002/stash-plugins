@@ -30,17 +30,26 @@ DEFAULT_WORKERS = 4
 
 def _run_write_task(fn):
     """Run a single write task (a callable returning a counters dict). Retries a
-    couple of times on transient errors -- Stash is SQLite-backed, so parallel
-    writes can briefly hit 'database is locked'. Never raises: logs and returns
-    {} on failure so one bad write doesn't sink the batch."""
-    for attempt in range(3):
+    few times on transient errors. Stash is SQLite-backed, so parallel writes can
+    briefly hit 'database is locked' AND intermittent 'FOREIGN KEY constraint
+    failed' on the join tables (performers_scenes etc.) when many concurrent
+    transactions reference the same row -- these are contention races, not real
+    data errors, and succeed once the contention clears. Never raises: logs and
+    returns {} on failure so one bad write doesn't sink the batch."""
+    transient_markers = (
+        "lock", "timeout", "connection", "busy",
+        "foreign key", "constraint",  # concurrent-write races on join tables
+    )
+    for attempt in range(5):
         try:
             return fn() or {}
         except RuntimeError as e:
             msg = str(e).lower()
-            transient = "lock" in msg or "timeout" in msg or "connection" in msg
-            if attempt < 2 and transient:
-                time.sleep(0.2 * (attempt + 1))
+            transient = any(m in msg for m in transient_markers)
+            if attempt < 4 and transient:
+                # Increasing back-off; threads naturally desync so the row is no
+                # longer contended on the retry.
+                time.sleep(0.25 * (attempt + 1))
                 continue
             log.LogError("  write failed: {}".format(e))
             return {}
