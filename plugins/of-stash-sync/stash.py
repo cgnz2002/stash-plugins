@@ -14,6 +14,13 @@ import log
 
 
 class StashClient:
+    # Per-request timeout. Under a big sync Stash's single SQLite writer
+    # serialises write transactions, so a queued write can legitimately take a
+    # while to come back; a short timeout turns normal contention into
+    # "write failed: timed out". Kept generous rather than tight -- a queued
+    # write that eventually lands beats a failed one.
+    REQUEST_TIMEOUT = 300
+
     def __init__(self, server_connection):
         scheme = server_connection.get("Scheme") or "http"
         port = server_connection.get("Port") or 9999
@@ -30,13 +37,21 @@ class StashClient:
         if self.session:
             req.add_header("Cookie", "session={}".format(self.session))
         try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
+            with urllib.request.urlopen(req, timeout=self.REQUEST_TIMEOUT) as resp:
                 body = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             detail = e.read().decode("utf-8", "ignore")
             raise RuntimeError("GraphQL HTTP {}: {}".format(e.code, detail))
         except urllib.error.URLError as e:
+            # Connect-time failures (reason may itself be a socket timeout).
             raise RuntimeError("GraphQL connection error: {}".format(e.reason))
+        except (TimeoutError, OSError) as e:
+            # A read timeout during resp.read() surfaces as a bare socket.timeout
+            # (a TimeoutError), NOT wrapped in URLError, so it would otherwise
+            # slip past callers' transient-error retry. Normalise it to a
+            # RuntimeError whose message contains "timed out" so run_writes
+            # treats it as transient and retries.
+            raise RuntimeError("GraphQL request timed out: {}".format(e))
         if body.get("errors"):
             raise RuntimeError("GraphQL error: {}".format(body["errors"]))
         return body.get("data") or {}

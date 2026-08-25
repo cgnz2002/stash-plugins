@@ -25,7 +25,13 @@ DEFAULT_MAX_TITLE_LENGTH = 65
 # Tag added to every synced scene, image and gallery so all OnlyFans media is
 # filterable by one tag. Created on first use if missing.
 DEFAULT_SITE_TAG = "OnlyFans"
-DEFAULT_WORKERS = 4
+# Stash is SQLite-backed and SQLite has a single writer, so parallel writes
+# don't actually commit concurrently -- they serialise on the DB write lock.
+# A little concurrency hides per-request latency, but too much just piles up
+# transactions until requests time out (and starves the rest of Stash). 2 is a
+# safe default; raise it only if your box handles it, drop to 1 if you see
+# "database is locked" / "timed out" in the log.
+DEFAULT_WORKERS = 2
 
 
 def _run_write_task(fn):
@@ -37,23 +43,22 @@ def _run_write_task(fn):
     data errors, and succeed once the contention clears. Never raises: logs and
     returns {} on failure so one bad write doesn't sink the batch."""
     transient_markers = (
-        "lock", "timeout", "connection", "busy",
+        "lock", "timeout", "timed out", "connection", "busy", "cancelled",
         "foreign key", "constraint",  # concurrent-write races on join tables
     )
     for attempt in range(5):
         try:
             return fn() or {}
-        except RuntimeError as e:
+        except Exception as e:  # never let a worker thread crash the batch
             msg = str(e).lower()
             transient = any(m in msg for m in transient_markers)
             if attempt < 4 and transient:
-                # Increasing back-off; threads naturally desync so the row is no
-                # longer contended on the retry.
-                time.sleep(0.25 * (attempt + 1))
+                # Exponential back-off (capped): a lock/FK race clears once
+                # threads desync, and a request that timed out under contention
+                # needs the write queue to drain -- a longer pause gives Stash's
+                # single SQLite writer room rather than piling straight back on.
+                time.sleep(min(0.5 * (2 ** attempt), 8))
                 continue
-            log.LogError("  write failed: {}".format(e))
-            return {}
-        except Exception as e:  # never let a worker thread crash the batch
             log.LogError("  write failed: {}".format(e))
             return {}
 

@@ -136,9 +136,18 @@ The four tasks are defined in the manifest and selected by `args.mode`:
   rare auto-create near-match). Each creator's scenes/images are fetched **once**
   (organized included; plain sync filters organized in code) and reused for the
   gallery pass. Writes (scene/image/gallery mutations) run through a thread pool
-  (`run_writes`, `Sync Workers` setting, default 4, 1 = sequential) with
-  retry-on-lock; **all resolution happens sequentially first**, so only stateless
-  mutations run concurrently (no shared-cache races, Stash's SQLite stays happy).
+  (`run_writes`, `Sync Workers` setting, default 2, 1 = sequential) with
+  retry-on-transient; **all resolution happens sequentially first**, so only
+  stateless mutations run concurrently (no shared-cache races). Note SQLite has
+  a **single writer**: parallel writes serialise on the DB write lock rather than
+  truly committing at once, so high worker counts don't speed writes up — they
+  pile up transactions until requests time out and starve the rest of Stash.
+  Hence the low default and the strong "lower it if you see errors" guidance.
+  `_run_write_task` retries transient contention (`lock` / `foreign key` /
+  `constraint` / `busy` / `timed out` / `cancelled`) up to 5× with capped
+  exponential back-off; a socket read timeout is normalised to a `timed out`
+  RuntimeError in `stash.py` (`REQUEST_TIMEOUT`, 300s) so it's caught by that
+  retry instead of slipping past as a bare `TimeoutError`.
 - **Non-destructive sync** — by default a sync/full pass *replaces* a media's
   `performer_ids` and `tag_ids` with the post's derived values, so a Full Sync
   drops manually-added performers/tags. The **Keep Manual Performers & Tags**
