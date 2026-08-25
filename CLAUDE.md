@@ -109,6 +109,13 @@ The four tasks are defined in the manifest and selected by `args.mode`:
 - **`StashClient` (stash.py)** — every GraphQL query/mutation. Fields were
   verified against the **Stash v0.31.1** schema. It connects to
   `localhost:<port>` (the plugin always runs on the same host as Stash).
+  **Auth:** Stash hands the plugin a *session cookie* on stdin, but that cookie
+  has a limited lifetime — a big Full Sync (thousands of items) can outlive it
+  and then get `HTTP 401` on every remaining request, failing whole creators
+  near the end. So `main()` calls `use_api_key()` up front: it reads
+  `configuration { general { apiKey } }` with the still-valid cookie and, if a
+  key exists, sends it as the `ApiKey` header on all later requests (API keys
+  don't expire). Falls back to the cookie (with a warning) when no key is set.
 - **`OFDatabase` (of_database.py)** — opens `user_data.db` files **read-only**
   (`mode=ro` URI) so a concurrently running OF-Scraper never causes a write or
   "readonly database" error. Schema verified against **OF-Scraper 3.14.7**. Post
