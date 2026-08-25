@@ -884,6 +884,21 @@ def main():
     crew_only = mode == "crew"
 
     client = StashClient(server)
+    # Adopt the non-expiring API key up front. A full sync can run long enough to
+    # outlive Stash's session cookie, which then 401s every remaining request
+    # (whole creators fail near the end of the run). The API key avoids that; if
+    # none is configured we fall back to the cookie and just warn.
+    try:
+        if client.use_api_key():
+            log.LogInfo("Using Stash API key for authentication (survives long runs).")
+        else:
+            log.LogWarning(
+                "No Stash API key configured; using the session cookie. On a very "
+                "large Full Sync the cookie can expire mid-run and cause HTTP 401 "
+                "errors. Set an API key in Stash Settings > Security to avoid this."
+            )
+    except RuntimeError:
+        pass  # non-fatal: keep using the session cookie
     try:
         config = client.get_plugin_config(PLUGIN_ID)
     except RuntimeError as e:

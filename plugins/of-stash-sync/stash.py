@@ -26,15 +26,42 @@ class StashClient:
         port = server_connection.get("Port") or 9999
         cookie = server_connection.get("SessionCookie") or {}
         self.session = cookie.get("Value") or ""
+        # An API key (fetched once via use_api_key()) takes over auth for the
+        # rest of the run. Stash's session cookie has a limited lifetime, so a
+        # very long sync (thousands of items) can outlive it and start getting
+        # HTTP 401s partway through; the API key does not expire.
+        self.api_key = ""
         # The plugin always runs on the same host as the Stash server.
         self.url = "{}://localhost:{}/graphql".format(scheme, port)
+
+    def use_api_key(self):
+        """Fetch the configured Stash API key (using the session cookie, which is
+        still valid at startup) and switch all subsequent requests to it, so a
+        long run can't be killed by the session cookie expiring mid-sync.
+
+        Returns True if an API key was found and adopted. If none is configured
+        (auth may be off, or no key set), returns False and we keep using the
+        cookie."""
+        try:
+            data = self.call("query { configuration { general { apiKey } } }")
+        except RuntimeError:
+            return False
+        key = (((data.get("configuration") or {}).get("general") or {}).get("apiKey")) or ""
+        if key:
+            self.api_key = key
+            return True
+        return False
 
     def call(self, query, variables=None):
         payload = json.dumps({"query": query, "variables": variables or {}}).encode("utf-8")
         req = urllib.request.Request(self.url, data=payload, method="POST")
         req.add_header("Content-Type", "application/json")
         req.add_header("Accept", "application/json")
-        if self.session:
+        # Prefer the non-expiring API key once adopted; otherwise the session
+        # cookie Stash handed the plugin on stdin.
+        if self.api_key:
+            req.add_header("ApiKey", self.api_key)
+        elif self.session:
             req.add_header("Cookie", "session={}".format(self.session))
         try:
             with urllib.request.urlopen(req, timeout=self.REQUEST_TIMEOUT) as resp:

@@ -53,6 +53,12 @@ Both current and older OF-Scraper database layouts are supported.
 - No Python dependencies. The plugin uses only the Python standard library, so
   nothing needs to be installed into the Stash container.
 - The parent studio (default `OnlyFans (network)`) must already exist in Stash.
+- **For large libraries, set an API key** in Stash **Settings → Security** (the
+  plugin picks it up automatically). A big Full Sync can run long enough to
+  outlive Stash's session cookie, which then returns `HTTP 401` on every
+  remaining request and fails the creators processed near the end. The API key
+  doesn't expire, so the plugin uses it in preference to the cookie and the run
+  completes. Without one it falls back to the cookie and logs a warning.
 - Performers should already exist with the OF username as their name or an
   alias (unless you enable *Create Missing Performers*).
 
