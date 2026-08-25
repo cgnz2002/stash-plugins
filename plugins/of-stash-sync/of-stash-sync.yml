@@ -1,6 +1,6 @@
 name: OnlyFans Metadata Sync
 description: Sync OF-Scraper metadata (title, details, date, URL, performers, studio) from user_data.db files into matching Stash scenes and images, and group each post's media into a gallery (linked to the post's scene).
-version: 1.11.1
+version: 1.12.0
 url: https://github.com/cgnz2002/stash-plugins
 
 settings:
@@ -22,7 +22,7 @@ settings:
     type: BOOLEAN
   autoCreatePerformers:
     displayName: Create Missing Performers
-    description: "When on, create a sparse performer for the creator (and any unmatched @mentions in the post text) instead of skipping. Default off."
+    description: "When on, create a sparse performer for the creator (and any unmatched collaborators in the post text, whether @mentioned or linked by profile URL) instead of skipping. Default off."
     type: BOOLEAN
   keepManualEdits:
     displayName: Keep Manual Performers & Tags
@@ -42,7 +42,7 @@ settings:
     type: NUMBER
   crewTagId:
     displayName: Crew Tag ID
-    description: "The Stash tag ID that marks crew performers (directors/photographers). Find it in the tag's page URL, e.g. .../tags/42 means the ID is 42. Any performer with this tag -- the creator or an @mentioned collaborator -- is credited in each scene's Director field and each image's Photographer field instead of the performers list; the studio still follows the media's source, and if a post's only credits are crew the creator is added as a performer so nothing is left empty. Leave empty to disable crew handling."
+    description: "The Stash tag ID that marks crew performers (directors/photographers). Find it in the tag's page URL, e.g. .../tags/42 means the ID is 42. Any performer with this tag -- the creator or a collaborator credited by @mention or profile URL (onlyfans.com/username) -- is credited in each scene's Director field and each image's Photographer field instead of the performers list; the studio still follows the media's source, and if a post's only credits are crew the creator is added as a performer so nothing is left empty. Leave empty to disable crew handling."
     type: STRING
 
 exec:

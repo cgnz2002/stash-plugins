@@ -30,6 +30,16 @@ _MENTION_RE = re.compile(
     r"(?:^|\s|>)@([\w\-]+(?:\.[\w\-]+)*)(?=[\s\.\?\!…<,:;]|$)"
 )
 
+# Profile links to a collaborator, e.g. onlyfans.com/ChicagoNerd (with or
+# without scheme/www/trailing punctuation). Some creators credit a collaborator
+# with a bare profile URL instead of an @mention, so these are treated as
+# mentions too. The captured first path segment is the username. Post URLs have
+# the form onlyfans.com/<postid>/<username> (a numeric first segment), so purely
+# numeric captures are filtered out in parse_mentions to avoid matching a post id.
+_PROFILE_URL_RE = re.compile(
+    r"onlyfans\.com/([A-Za-z0-9_\.\-]+)", re.IGNORECASE
+)
+
 _TAG_RE = re.compile(r"<[^>]+>")
 # Block-level boundaries that should become line breaks so text either side of
 # them (e.g. a headline paragraph and a body paragraph) is not glued together.
@@ -108,9 +118,27 @@ class MediaProcessor:
         return title, details
 
     def parse_mentions(self, text):
+        """Collaborators credited in the post text.
+
+        Picks up both `@mentions` and bare profile links
+        (`onlyfans.com/<username>`), since some creators link a collaborator by
+        URL instead of an @mention. A profile URL's username is its first path
+        segment; a post URL (`onlyfans.com/<postid>/<username>`) has a numeric
+        first segment, so purely-numeric captures are skipped to avoid mistaking
+        a post id for a username.
+        """
         mentions = []
         for match in _MENTION_RE.findall(text):
             name = match.lower()
+            if name not in mentions:
+                mentions.append(name)
+        for match in _PROFILE_URL_RE.findall(text):
+            # Trailing '.'/'-' are almost always sentence punctuation, not part
+            # of the username (usernames don't end in a separator).
+            name = match.lower().rstrip(".-")
+            # Skip the post-id form onlyfans.com/<postid>/<username>.
+            if not name or name.isdigit():
+                continue
             if name not in mentions:
                 mentions.append(name)
         return mentions
