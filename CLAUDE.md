@@ -135,8 +135,12 @@ The four tasks are defined in the manifest and selected by `args.mode`:
   (separator-insensitive, word-bounded, case-insensitive).
 - **sync.py resolvers** — `PerformerResolver`, `StudioResolver`, `TagResolver`,
   `TagTextMatcher` each cache lookups and create-if-missing where appropriate.
-  Updates are routed by where the media actually lives in Stash
-  (scene -> `sceneUpdate`, image -> `imageUpdate`).
+  `PerformerResolver` and `TagResolver` both build an in-memory index keyed by
+  lowercase **name *and* alias**, so a plugin tag such as `archived`/`paid`
+  resolves to an existing tag that carries the name as an alias instead of
+  hitting Stash's "name already exists" error on create (Stash enforces
+  uniqueness across tag names and aliases). Updates are routed by where the media
+  actually lives in Stash (scene -> `sceneUpdate`, image -> `imageUpdate`).
 - **Performance** — resolvers bulk-fetch **all** performers/studios once into
   in-memory maps (`find_all_performers`/`find_all_studios`), so username->performer
   resolution is a dict hit, not two queries per name (a live query only for the
