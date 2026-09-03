@@ -253,21 +253,48 @@ class StudioResolver:
 
 
 class TagResolver:
-    """Resolve (and create if missing) the paid/archived tags on demand."""
+    """Resolve (and create if missing) plugin tags: the OnlyFans site tag and the
+    paid/archived status tags.
+
+    Matching respects tag ALIASES, mirroring how performers are resolved. If the
+    name we want already exists as another tag's alias (e.g. 'archived' set as an
+    alias on some tag), we reuse that tag instead of trying to create it -- Stash
+    rejects a tagCreate whose name collides with an existing name *or* alias, so
+    a name-only lookup would keep hitting that error. Built once from a single
+    bulk fetch."""
 
     def __init__(self, client):
         self.client = client
         self.cache = {}
+        self._index = None  # lowercase name/alias -> tag id
+
+    def _ensure_index(self):
+        if self._index is not None:
+            return
+        self._index = {}
+        for tag in self.client.find_all_tags():
+            names = [tag["name"]] + (tag.get("aliases") or [])
+            for candidate in names:
+                key = (candidate or "").strip().lower()
+                # Stash enforces global uniqueness across names and aliases, so a
+                # key maps to one tag; the guard just avoids needless overwrites.
+                if key and key not in self._index:
+                    self._index[key] = tag["id"]
 
     def resolve(self, name):
-        if name in self.cache:
-            return self.cache[name]
-        tag_id = self.client.find_tag(name)
+        key = (name or "").strip().lower()
+        if not key:
+            return None
+        if key in self.cache:
+            return self.cache[key]
+        self._ensure_index()
+        tag_id = self._index.get(key)
         if not tag_id:
             tag_id = self.client.create_tag(name)
             if tag_id:
                 log.LogInfo("Created tag '{}'".format(name))
-        self.cache[name] = tag_id
+                self._index[key] = tag_id
+        self.cache[key] = tag_id
         return tag_id
 
 
