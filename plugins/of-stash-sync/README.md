@@ -82,6 +82,7 @@ Both current and older OF-Scraper database layouts are supported.
 | Sync Workers | `2` | How many scene/image/gallery writes to send to Stash at once. Stash is SQLite-backed and SQLite has a **single writer**, so parallel writes queue on the DB write lock rather than truly committing at once; a little concurrency hides latency but too much piles up transactions until they time out (and starves the rest of Stash). Writes retry automatically on transient "database is locked" / "FOREIGN KEY constraint" / "timed out" contention. **If you see those errors on a big Full Sync, lower this** — `1` (fully sequential) is safest. Range 1–16. |
 | Auto-tag From Post Text | off | Scan each post's text and attach any existing Stash tags whose name or alias appears in it. |
 | Skip Multi-file Scenes and Images | off | Sync and Full Sync skip any scene or image with more than one file (e.g. merged scenes), to protect their performers and metadata. Does not affect the Tag task. |
+| Title Exclusions | (empty) | Phrases/regexes stripped from generated **titles** only (the description keeps the original post text). Best edited via **Settings → Tools → "OnlyFans Sync: Title Exclusions"** (a list editor like Stash's scan Exclusions). See below. |
 | Crew Tag ID | (empty) | The Stash tag **ID** (from the tag's URL, e.g. `.../tags/42` → `42`) marking crew performers. A performer with this tag has their name put in each scene's Director field and each image's Photographer field instead of the performers list. Applies to the creator and any collaborator credited by `@mention` or profile URL (`onlyfans.com/username`). Empty disables crew handling. |
 
 ## Tasks
@@ -138,6 +139,34 @@ browsing their work is hard; a gallery groups a whole post, so it carries the
 crew credit as a real performer link (their crew tag still distinguishes them).
 The gallery's Photographer field is left empty. So: scenes and images move crew
 into Director/Photographer, while the post's gallery keeps them clickable.
+
+### Title exclusions (cleaning up boilerplate titles)
+
+Some creators prefix every title with boilerplate, e.g. `New collab: <the real
+title>`. **Title Exclusions** is a list of phrases/regexes that are stripped from
+the generated **title** — and only the title. The **description/details keeps the
+original post text**, so nothing is lost.
+
+Edit the list from **Settings → Tools → "OnlyFans Sync: Title Exclusions"**. That
+opens the same list editor as Stash's own scan **Exclusions** (a *Change* button →
+a modal with add/remove/reorder rows → *Confirm*). Add `new collab:` and the title
+`New collab: Beach day` becomes `Beach day`, while the description is unchanged.
+
+How matching works:
+
+- Each entry is a **case-insensitive regular expression** (a plain phrase like
+  `new collab:` is itself a valid regex, so you don't need to know regex to use
+  it). It is removed everywhere it appears in the title.
+- After removals, leftover separators (`:`, `-`, `|`, `…`) and extra spaces at the
+  title's edges are tidied.
+- If an entry would remove the *entire* title, the original title is kept (a title
+  is never left empty).
+- Invalid regexes are ignored (logged as a warning), so a typo can't break a sync.
+- Applies to scenes, images **and** galleries.
+
+The list is saved into the plugin's own config; the **Title Exclusions** field on
+the Settings → Plugins page is a hand-editable fallback (type one pattern, or
+paste a JSON array) if you'd rather not use the editor.
 
 ## Notes
 

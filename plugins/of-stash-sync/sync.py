@@ -102,6 +102,34 @@ def of_url(username):
     return "https://www.onlyfans.com/{}".format(username)
 
 
+def parse_title_exclusions(raw):
+    """Parse the Title Exclusions setting into a list of pattern strings.
+
+    The UI editor stores a JSON array (one pattern per row); a value hand-typed
+    into the raw settings field is accepted too, split on newlines. Blank entries
+    are dropped. Each surviving entry is compiled as a case-insensitive regex by
+    MediaProcessor (a literal phrase like 'new collab:' is itself a valid regex)."""
+    if raw is None or raw == "":
+        return []
+    # Stash may hand back the stored value as a native JSON array (list) or as
+    # the JSON string the UI editor writes; a value typed by hand into the
+    # settings field arrives as a plain string.
+    if isinstance(raw, (list, tuple)):
+        return [str(x) for x in raw if str(x).strip()]
+    text = str(raw).strip()
+    if not text:
+        return []
+    try:
+        data = json.loads(text)
+        if isinstance(data, list):
+            return [str(x) for x in data if str(x).strip()]
+        if isinstance(data, str) and data.strip():
+            return [data.strip()]
+    except (ValueError, TypeError):
+        pass
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
 class PerformerResolver:
     """Find performers by name/alias, optionally creating missing ones."""
 
@@ -945,6 +973,7 @@ def main():
     skip_multi_file = bool(get_setting(config, "skipMultiFile", False))
     crew_tag_id = get_setting(config, "crewTagId", "")
     keep_manual_edits = bool(get_setting(config, "keepManualEdits", False))
+    title_exclusions = parse_title_exclusions(get_setting(config, "titleExclusions", ""))
     try:
         workers = int(get_setting(config, "syncWorkers", DEFAULT_WORKERS))
     except (TypeError, ValueError):
@@ -1016,7 +1045,9 @@ def main():
         log.LogWarning("No user_data.db files found under {}".format(data_path))
         return
 
-    processor = MediaProcessor(max_title_length)
+    processor = MediaProcessor(max_title_length, title_exclusions)
+    if title_exclusions:
+        log.LogInfo("Loaded {} title exclusion pattern(s).".format(len(title_exclusions)))
     studios = StudioResolver(client, parent_studio_id, load_icon(server))
     # The crew pass is surgical maintenance: it must never create performers as
     # a side effect of resolving @mentions, even if Create Missing Performers is
