@@ -1,19 +1,21 @@
 // OnlyFans Metadata Sync -- Title Exclusions editor.
 //
-// Adds a list editor for the plugin's `titleExclusions` setting -- the phrases /
-// regexes stripped from generated scene/image/gallery titles. It reuses Stash's
-// OWN list component (`PluginApi.components.StringListSetting`, the same widget
-// behind Settings > Library > Exclusions: a "Change" button opening a modal with
-// add / remove / reorder rows and Confirm / Cancel), so it looks and behaves
-// exactly like the native Exclusions UI rather than a hand-rolled modal.
+// A list editor for the plugin's `titleExclusions` setting -- the phrases /
+// regexes stripped from generated scene/image/gallery titles.
 //
-// Surfaced the way real plugins do it (cf. CommunityScripts/AIOverhaul): a page
-// is registered at /plugins/of-stash-sync-titles and a button is injected into
-// Settings > Tools via patch.before("SettingsToolsSection"). The list is read
-// from and written to the plugin's own config with the standard
-// configuration{plugins} query and configurePlugin mutation. The value is stored
-// as a JSON string so it is also valid in the manifest "Title Exclusions" STRING
-// field (a hand-editable fallback if this script ever fails to load).
+// IMPORTANT: this renders on a standalone plugin route, which is OUTSIDE Stash's
+// SettingsContext. Stash's `StringListSetting` (the modal Exclusions widget) and
+// its `Setting`/`ModalSetting` wrappers call `useSettings()` internally and throw
+// "useSettings must be used within a SettingsContext" when rendered here. So this
+// uses its OWN context-free rows editor (add / remove rows + Save) instead of
+// Stash's list component -- functionally the same list-of-patterns UX, without the
+// settings-context dependency that crashed the page.
+//
+// The list is read from and written to the plugin's own config with the standard
+// configuration{plugins} query and configurePlugin mutation, stored as a JSON
+// string so the manifest "Title Exclusions" STRING field stays a hand-editable
+// fallback. Surfaced via a button in Settings > Tools
+// (patch.before("SettingsToolsSection")), the CommunityScripts/AIOverhaul pattern.
 (function () {
   "use strict";
 
@@ -41,15 +43,13 @@
     }).then(function (r) { return r.json(); });
   }
 
-  // Normalise whatever is stored (JSON array, JSON string, or newline text) into
-  // a string[] for the editor.
   function toList(raw) {
     if (Array.isArray(raw)) return raw.map(String);
     if (typeof raw === "string" && raw.trim()) {
       try {
         var arr = JSON.parse(raw);
         if (Array.isArray(arr)) return arr.map(String);
-      } catch (e) { /* not JSON: fall through to newline split */ }
+      } catch (e) { /* not JSON: newline split */ }
       return raw.split(/\r?\n/).map(function (s) { return s.trim(); })
                 .filter(function (s) { return s.length > 0; });
     }
@@ -67,8 +67,6 @@
 
   function savePatterns(list) {
     var input = {};
-    // Stored as a JSON string so it stays compatible with the manifest STRING
-    // field; the Python side parses JSON arrays, JSON strings and plain text.
     input[KEY] = JSON.stringify(list);
     return gql(
       "mutation ($id: ID!, $input: Map!) {" +
@@ -80,85 +78,96 @@
     });
   }
 
+  // Context-free rows editor: a row per pattern (text input + remove) plus an
+  // "Add pattern" button. No Stash app context required, so it renders safely on
+  // a standalone plugin route.
+  function RowsEditor(props) {
+    var value = props.value || [];
+    function setAt(i, v) {
+      var next = value.slice();
+      next[i] = v;
+      props.setValue(next);
+    }
+    function removeAt(i) {
+      var next = value.slice();
+      next.splice(i, 1);
+      props.setValue(next);
+    }
+    var rows = value.map(function (v, i) {
+      return React.createElement("div", { className: "input-group mb-2", key: i },
+        React.createElement("input", {
+          className: "form-control",
+          type: "text",
+          value: v,
+          placeholder: "new collab:",
+          onChange: function (e) { setAt(i, e.target.value); },
+        }),
+        React.createElement("div", { className: "input-group-append" },
+          React.createElement(Button, {
+            variant: "danger",
+            onClick: function () { removeAt(i); },
+          }, "−"))
+      );
+    });
+    rows.push(React.createElement("div", { key: "add" },
+      React.createElement(Button, {
+        variant: "secondary",
+        onClick: function () { props.setValue(value.concat([""])); },
+      }, "+ Add pattern")));
+    return React.createElement("div", null, rows);
+  }
+
   function TitleExclusionsPage() {
     var st = React.useState([]);
     var value = st[0], setValue = st[1];
     var ld = React.useState(true);
     var loading = ld[0], setLoading = ld[1];
-    var er = React.useState(null);
-    var error = er[0], setError = er[1];
+    var sv = React.useState("");
+    var status = sv[0], setStatus = sv[1];
 
     React.useEffect(function () {
       var live = true;
       loadPatterns()
         .then(function (list) { if (live) { setValue(list); setLoading(false); } })
-        .catch(function (e) { if (live) { setError(String(e)); setLoading(false); } });
+        .catch(function (e) {
+          if (live) { setStatus("Load failed: " + e); setLoading(false); }
+        });
       return function () { live = false; };
     }, []);
 
-    function onChange(next) {
-      setValue(next);
-      savePatterns(next).catch(function (e) {
-        setError("Could not save: " + (e && e.message ? e.message : e));
-      });
+    function onSave() {
+      var cleaned = value.map(function (s) { return (s || "").trim(); })
+                         .filter(function (s) { return s.length > 0; });
+      setStatus("Saving…");
+      savePatterns(cleaned)
+        .then(function () { setValue(cleaned); setStatus("Saved ✓"); })
+        .catch(function (e) { setStatus("Save failed: " + (e && e.message ? e.message : e)); });
     }
 
-    var StringListSetting = PluginApi.components && PluginApi.components.StringListSetting;
+    // Our own context-free rows editor. We deliberately do NOT use Stash's
+    // StringListSetting/StringListInput here: those (or their Setting/ModalSetting
+    // wrappers) call useSettings(), which throws outside the Settings page's
+    // SettingsContext -- which is exactly where this standalone plugin route
+    // renders. RowsEditor needs no app context, so it can't hit that crash.
+    var editor = React.createElement(RowsEditor, { value: value, setValue: setValue });
 
-    var children = [
-      React.createElement("h4", { key: "h" }, "OnlyFans Sync — Title Exclusions"),
-      React.createElement(
-        "p", { key: "d", className: "text-muted" },
+    return React.createElement("div",
+      { className: "container-fluid", style: { padding: "1.5rem", maxWidth: "760px" } },
+      React.createElement("h4", null, "OnlyFans Sync — Title Exclusions"),
+      React.createElement("p", { className: "text-muted" },
         "Phrases or regular expressions removed from generated scene, image and " +
-        "gallery titles. The description/details field keeps the original text. " +
-        "Matched case-insensitively; e.g. an entry \"new collab:\" turns " +
-        "\"New collab: Beach day\" into \"Beach day\"."
-      ),
-    ];
-
-    if (error) {
-      children.push(React.createElement(
-        "div", { key: "e", className: "text-danger" }, String(error)));
-    }
-
-    if (StringListSetting) {
-      children.push(React.createElement(StringListSetting, {
-        key: "list",
-        id: "of-stash-sync-title-exclusions",
-        heading: "Title exclusions",
-        subHeading: "One phrase or regex per row. Removed from titles only.",
-        value: value,
-        onChange: onChange,
-        defaultNewValue: "new collab:",
-        disabled: loading,
-      }));
-    } else {
-      // Very old Stash without the component: fall back to a plain textarea.
-      children.push(React.createElement("textarea", {
-        key: "ta",
-        className: "form-control",
-        rows: 8,
-        defaultValue: value.join("\n"),
-        disabled: loading,
-        onBlur: function (ev) {
-          onChange(ev.target.value.split(/\r?\n/)
-            .map(function (s) { return s.trim(); })
-            .filter(function (s) { return s.length > 0; }));
-        },
-      }));
-      children.push(React.createElement(
-        "p", { key: "fallnote", className: "text-muted" },
-        "One pattern per line; saved when you click away."));
-    }
-
-    if (Link) {
-      children.push(React.createElement(
-        "div", { key: "back", style: { marginTop: "1rem" } },
-        React.createElement(Link, { to: "/settings?tab=plugins" }, "← Back to plugin settings")));
-    }
-
-    return React.createElement("div", { className: "container-fluid", style: { padding: "1rem" } },
-      children);
+        "gallery titles. The description/details keeps the original post text. " +
+        "Matched case-insensitively; e.g. \"new collab:\" turns " +
+        "\"New collab: Beach day\" into \"Beach day\"."),
+      loading ? React.createElement("div", null, "Loading…") : editor,
+      React.createElement("div", { style: { marginTop: "1rem" } },
+        React.createElement(Button, { variant: "primary", disabled: loading, onClick: onSave }, "Save"),
+        React.createElement("span", { style: { marginLeft: "0.75rem" } }, status)),
+      Link
+        ? React.createElement("div", { style: { marginTop: "1.5rem" } },
+            React.createElement(Link, { to: "/settings?tab=plugins" }, "← Back to plugin settings"))
+        : null
+    );
   }
 
   try {
@@ -169,7 +178,6 @@
     console.error("[of-stash-sync] could not register title-exclusions route:", e);
   }
 
-  // Add a button under Settings > Tools that opens the editor page.
   try {
     PluginApi.patch.before("SettingsToolsSection", function (props) {
       var Setting = PluginApi.components && PluginApi.components.Setting;

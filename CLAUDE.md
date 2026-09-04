@@ -67,12 +67,15 @@ plugins/
 of-stash-sync also ships two UI-JS plugins (wired via the manifest `ui:` block):
 `performerSync.js` (the per-performer "Sync OnlyFans" button) and
 `titleExclusions.js` (a list editor for the `titleExclusions` setting). The
-latter reuses **Stash's own** `PluginApi.components.StringListSetting` — the same
-widget as Settings → Library → Exclusions — surfaced via `register.route` plus a
-`patch.before("SettingsToolsSection")` button (the CommunityScripts/AIOverhaul
-pattern), and persists the list with the `configurePlugin` mutation (read back by
-`sync.py` from `configuration { plugins }`). Values are stored as a JSON string so
-the manifest `titleExclusions` STRING field stays a hand-editable fallback.
+latter is surfaced via `register.route` plus a `patch.before("SettingsToolsSection")`
+button (the CommunityScripts/AIOverhaul pattern), and persists the list with the
+`configurePlugin` mutation (read back by `sync.py` from `configuration { plugins }`).
+Values are stored as a JSON string so the manifest `titleExclusions` STRING field
+stays a hand-editable fallback. **It deliberately does NOT reuse Stash's
+`StringListSetting`/`StringListInput`**: those (and their `Setting`/`ModalSetting`
+wrappers) call `useSettings()`, which throws `useSettings must be used within a
+SettingsContext` on a standalone plugin route — so the editor uses its own
+context-free rows editor (row-per-pattern + Save) instead.
 
 ## How the plugin runs
 
