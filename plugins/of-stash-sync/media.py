@@ -10,6 +10,8 @@ import os
 import re
 from datetime import datetime
 
+import log
+
 # Broad set of emoji/pictograph/dingbat/flag ranges, used to allow titles to be
 # truncated immediately after an emoji (mirrors the original tool's behaviour).
 _EMOJI_RE = re.compile(
@@ -71,9 +73,46 @@ def compile_name_pattern(name):
     )
 
 
+# Leading/trailing separators/punctuation left behind after a phrase is removed
+# from a title (e.g. removing "new collab" from "new collab: title" leaves
+# ": title"). Trimmed off each end so the cleaned title reads naturally.
+_TITLE_EDGE_RE = re.compile(r"^[\s:;\-–—|/\\.,•·]+|[\s:;\-–—|/\\.,•·]+$")
+
+
 class MediaProcessor:
-    def __init__(self, max_title_length):
+    def __init__(self, max_title_length, title_exclusions=None):
         self.max_title_length = max_title_length
+        # Compiled regexes removed from generated TITLES only (details/description
+        # are left untouched). Each entry is a user-supplied regex, matched
+        # case-insensitively anywhere in the title.
+        self.title_exclusions = self._compile_exclusions(title_exclusions or [])
+
+    @staticmethod
+    def _compile_exclusions(patterns):
+        compiled = []
+        for raw in patterns:
+            if raw is None or not str(raw).strip():
+                continue
+            try:
+                compiled.append(re.compile(raw, re.IGNORECASE))
+            except re.error as e:
+                log.LogWarning(
+                    "Ignoring invalid title exclusion pattern {!r}: {}".format(raw, e)
+                )
+        return compiled
+
+    def apply_title_exclusions(self, title):
+        """Remove every configured exclusion phrase/regex from a title and tidy up
+        the leftover separators. Never returns empty: if stripping would leave
+        nothing, the original title is kept."""
+        if not title or not self.title_exclusions:
+            return title
+        cleaned = title
+        for pattern in self.title_exclusions:
+            cleaned = pattern.sub("", cleaned)
+        cleaned = re.sub(r"\s{2,}", " ", cleaned)
+        cleaned = _TITLE_EDGE_RE.sub("", cleaned).strip()
+        return cleaned or title
 
     def remove_html_tags(self, text):
         # Turn block boundaries (br, closing p/div/heading) into newlines first
@@ -115,6 +154,14 @@ class MediaProcessor:
             title = self.truncate_title(title, self.max_title_length)
         if title == details:
             details = ""
+        # Title-only exclusion pass. Done AFTER details is finalised (from the
+        # unstripped title) so the description keeps the original text verbatim;
+        # only the scene/image/gallery title has the configured phrases removed.
+        stripped = self.apply_title_exclusions(title)
+        if stripped != title:
+            if len(stripped) > self.max_title_length:
+                stripped = self.truncate_title(stripped, self.max_title_length)
+            title = stripped
         return title, details
 
     def parse_mentions(self, text):

@@ -1,6 +1,6 @@
 name: OnlyFans Metadata Sync
 description: Sync OF-Scraper metadata (title, details, date, URL, performers, studio) from user_data.db files into matching Stash scenes and images, and group each post's media into a gallery (linked to the post's scene).
-version: 1.12.3
+version: 1.13.0
 url: https://github.com/cgnz2002/stash-plugins
 
 settings:
@@ -40,6 +40,10 @@ settings:
     displayName: Sync Workers
     description: "How many scene/image/gallery writes to send to Stash at once. Stash is SQLite-backed and SQLite has a SINGLE writer, so parallel writes don't truly commit in parallel -- they queue on the DB write lock. A little concurrency hides latency; too much just piles up transactions until they time out and starves the rest of Stash. Writes are retried automatically on transient 'database is locked' / 'FOREIGN KEY constraint' / 'timed out' contention. If you see those errors on big Full Syncs, LOWER this (1 = original one-at-a-time behaviour, the safest). Range 1-16. Default 2."
     type: NUMBER
+  titleExclusions:
+    displayName: Title Exclusions
+    description: "Phrases or regular expressions to strip from generated scene/image/gallery TITLES. The details/description field is left untouched (it keeps the original post text). Each entry is matched case-insensitively anywhere in the title and removed, then leftover separators are tidied -- e.g. an entry 'new collab:' turns the title 'New collab: Beach day' into 'Beach day' while the description stays as written. Stored as a JSON array; use the 'Edit title exclusions' button this plugin adds to the Settings > Plugins page for a list editor like Stash's scan Exclusions, or paste a JSON array of patterns here."
+    type: STRING
   crewTagId:
     displayName: Crew Tag ID
     description: "The Stash tag ID that marks crew performers (directors/photographers). Find it in the tag's page URL, e.g. .../tags/42 means the ID is 42. Any performer with this tag -- the creator or a collaborator credited by @mention or profile URL (onlyfans.com/username) -- is credited in each scene's Director field and each image's Photographer field instead of the performers list; the studio still follows the media's source, and if a post's only credits are crew the creator is added as a performer so nothing is left empty. Leave empty to disable crew handling."
