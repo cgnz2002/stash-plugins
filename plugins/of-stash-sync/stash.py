@@ -93,17 +93,14 @@ class StashClient:
     # ----- studios -------------------------------------------------------
 
     def find_studio(self, name):
-        query = """
-        query FindStudios($f: StudioFilterType!) {
-            findStudios(studio_filter: $f, filter: { per_page: -1 }) {
-                studios { id name }
-            }
-        }
-        """
-        variables = {"f": {"name": {"value": name, "modifier": "EQUALS"}}}
-        studios = self.call(query, variables)["findStudios"]["studios"]
-        for studio in studios:
-            if studio["name"].lower() == name.lower():
+        """Find a studio by name OR alias (case-insensitive). Alias-aware -- like
+        tags and performers, Stash enforces studio uniqueness across names AND
+        aliases, so a studio the user named differently but that carries this
+        name as an alias is still matched (and not duplicated)."""
+        target = (name or "").strip().lower()
+        for studio in self.find_all_studios():
+            names = [studio.get("name") or ""] + (studio.get("aliases") or [])
+            if any((n or "").strip().lower() == target for n in names):
                 return studio["id"]
         return None
 
@@ -179,12 +176,14 @@ class StashClient:
         return self.call(query)["findPerformers"]["performers"]
 
     def find_all_studios(self):
-        """Every studio (id, name), fetched once so the per-creator studio lookup
-        is an in-memory map hit instead of a query each."""
+        """Every studio (id, name, aliases), fetched once so the per-creator
+        studio lookup is an in-memory map hit instead of a query each. Aliases are
+        included so resolution is alias-aware (Stash enforces studio uniqueness
+        across names and aliases)."""
         query = """
         query AllStudios {
             findStudios(filter: { per_page: -1 }) {
-                studios { id name }
+                studios { id name aliases }
             }
         }
         """

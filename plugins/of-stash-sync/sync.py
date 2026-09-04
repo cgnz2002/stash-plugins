@@ -256,8 +256,17 @@ class StudioResolver:
         if self._map is not None:
             return
         self._map = {}
+        # Key by name AND alias (mirroring TagResolver/PerformerResolver), so a
+        # per-creator studio whose "<username> (OnlyFans)" name already exists as
+        # another studio's alias resolves to it instead of hitting Stash's
+        # name-already-exists error on create (Stash enforces studio uniqueness
+        # across names and aliases).
         for studio in self.client.find_all_studios():
-            self._map[(studio.get("name") or "").strip().lower()] = studio["id"]
+            names = [studio.get("name") or ""] + (studio.get("aliases") or [])
+            for candidate in names:
+                key = (candidate or "").strip().lower()
+                if key and key not in self._map:
+                    self._map[key] = studio["id"]
 
     def resolve(self, username):
         if username in self.cache:
