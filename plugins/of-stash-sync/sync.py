@@ -109,8 +109,13 @@ def parse_title_exclusions(raw):
     into the raw settings field is accepted too, split on newlines. Blank entries
     are dropped. Each surviving entry is compiled as a case-insensitive regex by
     MediaProcessor (a literal phrase like 'new collab:' is itself a valid regex)."""
-    if not raw:
+    if raw is None or raw == "":
         return []
+    # Stash may hand back the stored value as a native JSON array (list) or as
+    # the JSON string the UI editor writes; a value typed by hand into the
+    # settings field arrives as a plain string.
+    if isinstance(raw, (list, tuple)):
+        return [str(x) for x in raw if str(x).strip()]
     text = str(raw).strip()
     if not text:
         return []

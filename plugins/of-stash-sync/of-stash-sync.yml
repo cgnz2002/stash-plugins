@@ -42,7 +42,7 @@ settings:
     type: NUMBER
   titleExclusions:
     displayName: Title Exclusions
-    description: "Phrases or regular expressions to strip from generated scene/image/gallery TITLES. The details/description field is left untouched (it keeps the original post text). Each entry is matched case-insensitively anywhere in the title and removed, then leftover separators are tidied -- e.g. an entry 'new collab:' turns the title 'New collab: Beach day' into 'Beach day' while the description stays as written. Stored as a JSON array; use the 'Edit title exclusions' button this plugin adds to the Settings > Plugins page for a list editor like Stash's scan Exclusions, or paste a JSON array of patterns here."
+    description: "Phrases or regular expressions to strip from generated scene/image/gallery TITLES. The details/description field is left untouched (it keeps the original post text). Each entry is matched case-insensitively anywhere in the title and removed, then leftover separators are tidied -- e.g. an entry 'new collab:' turns the title 'New collab: Beach day' into 'Beach day' while the description stays as written. Best edited with the list editor: Settings > Tools > 'OnlyFans Sync: Title Exclusions' (the same widget as Stash's scan Exclusions). This field is a fallback -- you can also type one pattern here or paste a JSON array."
     type: STRING
   crewTagId:
     displayName: Crew Tag ID
@@ -58,6 +58,7 @@ errLog: error
 ui:
   javascript:
     - performerSync.js
+    - titleExclusions.js
 
 tasks:
   - name: Sync OF Metadata

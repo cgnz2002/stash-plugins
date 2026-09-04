@@ -64,6 +64,16 @@ plugins/
     patreon.png                      Studio icon
 ```
 
+of-stash-sync also ships two UI-JS plugins (wired via the manifest `ui:` block):
+`performerSync.js` (the per-performer "Sync OnlyFans" button) and
+`titleExclusions.js` (a list editor for the `titleExclusions` setting). The
+latter reuses **Stash's own** `PluginApi.components.StringListSetting` — the same
+widget as Settings → Library → Exclusions — surfaced via `register.route` plus a
+`patch.before("SettingsToolsSection")` button (the CommunityScripts/AIOverhaul
+pattern), and persists the list with the `configurePlugin` mutation (read back by
+`sync.py` from `configuration { plugins }`). Values are stored as a JSON string so
+the manifest `titleExclusions` STRING field stays a hand-editable fallback.
+
 ## How the plugin runs
 
 Stash invokes `sync.py` as a **raw external plugin** (`interface: raw` in the
@@ -130,7 +140,13 @@ The four tasks are defined in the manifest and selected by `args.mode`:
   (`onlyfans.com/<username>`), because creators sometimes credit a collaborator
   by URL instead of an @mention; the post-id URL form
   `onlyfans.com/<postid>/<username>` is excluded by skipping purely-numeric
-  first segments. Tag matching
+  first segments. `process_text` also applies the **Title Exclusions** list
+  (`titleExclusions` setting, parsed by `parse_title_exclusions`): each entry is
+  a case-insensitive regex removed from the **title only** — details/description
+  keeps the original post text verbatim. Stripping happens after the details
+  decision so the description is untouched, leftover edge separators are tidied,
+  and a title is never left empty (falls back to the original). Applies to
+  scenes, images and galleries via this one chokepoint. Tag matching
   (`compile_name_pattern`) mirrors Stash's own auto-tagger
   (separator-insensitive, word-bounded, case-insensitive).
 - **sync.py resolvers** — `PerformerResolver`, `StudioResolver`, `TagResolver`,
