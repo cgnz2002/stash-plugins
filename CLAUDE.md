@@ -74,6 +74,7 @@ plugins/
     jff_database.py                  Reader for jff-scraper user_data.db (+ jff_posts)
     stash.py, media.py, log.py       Copied from of-stash-sync (media.py: justfor.fans links)
     performerSync.js, titleExclusions.js  UI plugins (same pattern, JFF ids/labels)
+    justforfans.png                  Studio icon (also back-filled onto existing studios)
     README.md                        User-facing docs
 ```
 
@@ -111,6 +112,15 @@ exists because of something the platform or the scraper does:
 - **Performance** — `jff_posts` is bulk-loaded once per creator into a dict
   (`_ensure_jff_index`), because each post needs several of its fields and a query
   per field would be four round-trips per post.
+- **Studio logo back-fill** — Stash only accepts a studio image on *create*, so
+  studios made before `justforfans.png` shipped would stay blank forever.
+  `StudioResolver` therefore also sets the logo on an existing per-creator studio
+  when Stash reports it as having none. The signal is `image_path` containing
+  `&default=true`, which Stash's `GetStudioImageURL(hasImage)` appends only when
+  the studio has no image of its own — so a studio with any image (including a
+  hand-picked one) is never overwritten, and the update runs at most once per
+  studio per run. of-stash-sync has the same create-only limitation and has not
+  been given this treatment.
 - The scraper's per-post `.json` sidecars are deliberately **not** read: the DB
   already holds everything, and per-post file reads are what made an early version
   of the Patreon plugin time out.

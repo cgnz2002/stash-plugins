@@ -277,7 +277,8 @@ class StudioResolver:
         self.parent_id = parent_id
         self.icon = icon_data_url
         self.cache = {}
-        self._map = None  # lowercase studio name -> id, built once
+        self._map = None  # lowercase studio name/alias -> id, built once
+        self._no_image = set()  # studio ids Stash reports as having no image
 
     def _ensure_map(self):
         if self._map is not None:
@@ -294,6 +295,11 @@ class StudioResolver:
                 key = (candidate or "").strip().lower()
                 if key and key not in self._map:
                     self._map[key] = studio["id"]
+            # Stash appends "&default=true" to image_path when a studio has no
+            # image of its own, so this set is exactly the studios whose logo can
+            # be filled in without overwriting one somebody chose.
+            if "default=true" in (studio.get("image_path") or ""):
+                self._no_image.add(studio["id"])
 
     def resolve(self, username):
         if username in self.cache:
@@ -312,6 +318,17 @@ class StudioResolver:
             if studio_id:
                 self._map[name.strip().lower()] = studio_id
             log.LogInfo("Created studio '{}'".format(name))
+        elif self.icon and studio_id in self._no_image:
+            # Back-fill the logo onto a studio created before the plugin shipped
+            # an icon (the image is only passed on create). Guarded by _no_image,
+            # so a studio with any image of its own is never touched, and it only
+            # runs once per studio per run.
+            self._no_image.discard(studio_id)
+            try:
+                self.client.update_studio({"id": studio_id, "image": self.icon})
+                log.LogInfo("Added logo to existing studio '{}'".format(name))
+            except RuntimeError as e:
+                log.LogWarning("Could not set logo on studio '{}': {}".format(name, e))
         self.cache[username] = studio_id
         return studio_id
 

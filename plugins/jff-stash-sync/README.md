@@ -138,11 +138,20 @@ Each entry is a case-insensitive regex (a plain phrase works too), leftover
 separators are tidied, a title is never left empty, and an invalid regex is
 ignored with a warning rather than breaking the sync.
 
-### Studio icon (optional)
+### Studio logo
 
-Drop a `justforfans.png` into this plugin's folder and it is used as the image
-for per-creator studios it creates. Without one, studios are created without an
-image — everything else works the same.
+The plugin ships `justforfans.png` and uses it as the image for the per-creator
+studios it creates, the same way of-stash-sync uses the OnlyFans logo.
+
+Stash only accepts an image when a studio is **created**, so studios made before
+the logo shipped would otherwise stay blank. The sync therefore also **back-fills**
+it: any per-creator studio that Stash reports as having no image of its own gets
+the logo set once. A studio with an image already — including one you picked
+yourself — is never touched. Swap the logo by replacing `justforfans.png` in this
+plugin's folder.
+
+The **parent** studio is yours (the plugin only looks it up, never creates it), so
+set its image by hand if you want one.
 
 ## Notes
 

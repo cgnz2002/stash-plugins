@@ -1,6 +1,6 @@
 name: JustFor.Fans Metadata Sync
 description: Sync jff-scraper metadata (title, details, date, real post URL, performers, studio, hashtags) from user_data.db files into matching Stash scenes and images, and group each post's media into a gallery (linked to the post's scene).
-version: 1.0.0
+version: 1.0.1
 url: https://github.com/cgnz2002/stash-plugins
 
 settings:
