@@ -188,7 +188,14 @@ class PerformerResolver:
             return set(), None
         return info["roles"], info["name"]
 
-    def resolve(self, username, from_mention=False):
+    def resolve(self, username, from_mention=False, source=None):
+        """Performer ids for a username, creating one if allowed.
+
+        ``source`` is the site the *credit* came from, used only for the URL of
+        a performer this call creates. Pass it when the credit was a profile
+        link, since a post can link a collaborator on a different site than the
+        post's own; it defaults to the site being synced.
+        """
         key = username.lower()
         if key in self.cache:
             return self.cache[key]
@@ -235,14 +242,23 @@ class PerformerResolver:
                     "correct performer.".format(username, names)
                 )
             else:
+                # The URL follows the site the credit came from, not the site
+                # being synced: a post can credit a collaborator with a link to
+                # another site, and pointing that performer at the wrong one
+                # would give them a profile URL that doesn't exist.
+                site = source or self.source
                 new_id = self.client.create_performer(
-                    username, self.source.profile_url(username)
+                    username, site.profile_url(username)
                 )
                 if new_id:
                     ids = [new_id]
                     self._register({"id": new_id, "name": username, "alias_list": [], "tags": []})
-                    source = " (from @mention)" if from_mention else ""
-                    log.LogInfo("Created performer '{}'{}".format(username, source))
+                    origin = " (from @mention)" if from_mention else ""
+                    log.LogInfo(
+                        "Created performer '{}' [{}]{}".format(
+                            username, site.label, origin
+                        )
+                    )
         self.cache[key] = ids
         return ids
 
@@ -477,8 +493,14 @@ def collect_crew(processor, resolver, text, creator_roles, creator_name, creator
 
     mention_performer_ids = []
     if text:
-        for mention in processor.parse_mentions(text):
-            ids = resolver.resolve(mention, from_mention=True)
+        for mention, domain in processor.parse_mentions(text):
+            # A credit given as a profile link names its own site, which may not
+            # be the site the post came from; a bare @mention names none, and
+            # resolve() then falls back to the site being synced.
+            ids = resolver.resolve(
+                mention, from_mention=True,
+                source=sources.profile_for_domain(domain),
+            )
             m_roles, m_name = resolver.creator_credit(mention)
             if m_roles:
                 if m_name:
@@ -644,8 +666,11 @@ def _gallery_meta(db, processor, profile, post_id, group, performers, tags,
     # everyone credited: the creator plus every @mentioned account, crew or not.
     performer_ids = list(creator_ids)
     if text:
-        for mention in processor.parse_mentions(text):
-            for pid in performers.resolve(mention, from_mention=True):
+        for mention, domain in processor.parse_mentions(text):
+            for pid in performers.resolve(
+                mention, from_mention=True,
+                source=sources.profile_for_domain(domain),
+            ):
                 if pid not in performer_ids:
                     performer_ids.append(pid)
     if not performer_ids:

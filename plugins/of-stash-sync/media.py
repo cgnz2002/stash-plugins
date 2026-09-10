@@ -47,7 +47,7 @@ _MENTION_RE = re.compile(
 # justfor.fans/<username>?Post=<key>, whose first segment already is the
 # username (the query string is not part of the capture).
 _PROFILE_URL_RE = re.compile(
-    r"(?:onlyfans\.com|justfor\.fans)/([A-Za-z0-9_\.\-]+)", re.IGNORECASE
+    r"(onlyfans\.com|justfor\.fans)/([A-Za-z0-9_\.\-]+)", re.IGNORECASE
 )
 
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -173,31 +173,44 @@ class MediaProcessor:
         return title, details
 
     def parse_mentions(self, text):
-        """Collaborators credited in the post text.
+        """Collaborators credited in the post text, as ``(username, domain)``.
 
-        Picks up both `@mentions` and bare profile links
-        (`onlyfans.com/<username>` or `justfor.fans/<username>`), since some
-        creators link a collaborator by URL instead of an @mention. A profile
-        URL's username is its first path segment; an OnlyFans post URL
+        ``domain`` is the site of the profile link the credit came from
+        (``onlyfans.com`` / ``justfor.fans``), or ``None`` for a bare ``@mention``.
+
+        The caller needs that distinction: a performer created for a URL credit
+        should be given a URL on the site the link actually named. Posts do cross
+        sites -- a JustFor.Fans creator can link an onlyfans.com profile and vice
+        versa -- so assuming the post's own site would stamp the wrong profile
+        URL on the new performer. A bare @mention names no site, so ``None`` lets
+        the caller fall back to the post's own.
+
+        Both forms are deduplicated by username, and a URL credit wins over a
+        bare @mention for the same name because it identifies the site.
+
+        A profile URL's username is its first path segment; an OnlyFans post URL
         (`onlyfans.com/<postid>/<username>`) has a numeric first segment, so
         purely-numeric captures are skipped to avoid mistaking a post id for a
         username.
         """
-        mentions = []
+        order = []
+        domains = {}
         for match in _MENTION_RE.findall(text):
             name = match.lower()
-            if name not in mentions:
-                mentions.append(name)
-        for match in _PROFILE_URL_RE.findall(text):
+            if name not in domains:
+                order.append(name)
+                domains[name] = None
+        for domain, match in _PROFILE_URL_RE.findall(text):
             # Trailing '.'/'-' are almost always sentence punctuation, not part
             # of the username (usernames don't end in a separator).
             name = match.lower().rstrip(".-")
             # Skip the post-id form onlyfans.com/<postid>/<username>.
             if not name or name.isdigit():
                 continue
-            if name not in mentions:
-                mentions.append(name)
-        return mentions
+            if name not in domains:
+                order.append(name)
+            domains[name] = domain.lower()
+        return [(name, domains[name]) for name in order]
 
     def studio_code(self, filename):
         if not filename:

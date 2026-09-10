@@ -140,6 +140,7 @@ JUSTFORFANS = SourceProfile(
 
 ALL_PROFILES = [ONLYFANS, JUSTFORFANS]
 _BY_KEY = {p.key: p for p in ALL_PROFILES}
+_BY_DOMAIN = {p.link_domain: p for p in ALL_PROFILES}
 
 
 def profile_for_source(source):
@@ -147,3 +148,18 @@ def profile_for_source(source):
     database has no such flag (source is None), which selects OnlyFans."""
     key = (str(source).strip().lower() or None) if source else None
     return _BY_KEY.get(key, ONLYFANS)
+
+
+def profile_for_domain(domain):
+    """Profile for the site a collaborator's profile link points at, or None
+    when there is no link to go on (a bare @mention).
+
+    A post can credit a collaborator with a link to *another* site -- a
+    JustFor.Fans creator plugging their OnlyFans, say -- so a performer created
+    from such a credit must get the URL of the site that was actually linked,
+    not the site the post came from. None means 'unknown', and the caller falls
+    back to the post's own source.
+    """
+    if not domain:
+        return None
+    return _BY_DOMAIN.get(str(domain).strip().lower())

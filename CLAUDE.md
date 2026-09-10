@@ -195,10 +195,16 @@ The four tasks are defined in the manifest and selected by `args.mode`:
 - **`MediaProcessor` (media.py)** — turns post text into title/details, parses
   collaborator credits, derives studio code from filename, formats dates.
   `parse_mentions` picks up both `@mentions` **and** bare profile links
-  (`onlyfans.com/<username>`), because creators sometimes credit a collaborator
-  by URL instead of an @mention; the post-id URL form
-  `onlyfans.com/<postid>/<username>` is excluded by skipping purely-numeric
-  first segments. `process_text` also applies the **Title Exclusions** list
+  (`onlyfans.com/<username>`, `justfor.fans/<username>`), because creators
+  sometimes credit a collaborator by URL instead of an @mention; the post-id URL
+  form `onlyfans.com/<postid>/<username>` is excluded by skipping purely-numeric
+  first segments. It returns `(username, domain)` pairs rather than bare names:
+  a post can link a collaborator on **another** site (a JFF creator plugging
+  their OnlyFans), and a performer created from that credit must get the URL of
+  the site that was linked, not the site being synced. `sources.profile_for_domain`
+  maps the domain to a profile and returns `None` for a bare @mention, which
+  makes `PerformerResolver.resolve(..., source=None)` fall back to the database's
+  own site. `process_text` also applies the **Title Exclusions** list
   (`titleExclusions` setting, parsed by `parse_title_exclusions`): each entry is
   a case-insensitive regex removed from the **title only** — details/description
   keeps the original post text verbatim. Stripping happens after the details

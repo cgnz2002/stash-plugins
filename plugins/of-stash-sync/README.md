@@ -41,20 +41,26 @@ synced in one run.
 For every `user_data.db` found under the configured data path, and for each
 creator profile in it:
 
-- Resolves (or creates) a per-creator studio `<username> (OnlyFans)` as a child
-  of the configured parent studio (default `OnlyFans (network)`).
+- Resolves (or creates) a per-creator studio for that site (`<username>
+  (OnlyFans)` / `<username> (JustForFans)`) as a child of that site's parent
+  studio.
 - Finds that creator's Stash scenes and images by file path and matches each
-  file back to the OF-Scraper database by filename.
-- Sets **title** and **details** from the post text, **date** from the OF post
-  date, **studio**, **code** (OF media id), **URL** to the original post, and
-  **performers** (the creator plus any collaborators credited in the post text,
-  whether `@mentioned` or linked by a bare profile URL like
-  `onlyfans.com/username`).
+  file back to the scraper database by filename.
+- Sets **title** and **details** from the post text, **date** from the post
+  date, **studio**, **code**, **URL** to the original post, and **performers**
+  (the creator plus any collaborators credited in the post text, whether
+  `@mentioned` or linked by a bare profile URL like `onlyfans.com/username` or
+  `justfor.fans/username`).
+  A collaborator the plugin has to create gets the profile URL of the site
+  they were actually linked on — so a JustFor.Fans post plugging someone's
+  OnlyFans creates that performer with their OnlyFans URL, not a JustFor.Fans
+  one. A bare `@mention` names no site, so it uses the site being synced.
 - Credits anyone tagged as **crew** (see *Crew Tag Name*) in the scene
   **Director** / image **Photographer** field instead of the performers list.
 - Groups each post's media into a **gallery** (see below).
-- Tags every synced scene, image and gallery with an **`OnlyFans`** tag (created
-  if missing), so all OnlyFans media is filterable by one tag.
+- Tags every synced scene, image and gallery with that site's tag (`OnlyFans` /
+  `JustFor.Fans`, created if missing), so each site's media is filterable by one
+  tag.
 - Optionally tags media `paid` / `archived`.
 - Marks each synced item **organized** so the normal sync skips it next time.
 
