@@ -1,19 +1,26 @@
-"""Reader for the jff-scraper's ``user_data.db`` sqlite databases.
+"""Read-only reader for the scraper databases this plugin syncs from.
 
-jff-scraper writes an **OF-Scraper-compatible** core (``profiles``, ``medias``,
-``posts`` with a numeric ``model_id`` and ``posted_at``), so the OF-Scraper
-reading pattern applies unchanged. On top of that it writes JustFor.Fans-native
-metadata this plugin uses:
+One reader serves both supported sites, because their schemas are the same
+shape: OF-Scraper's `profiles` / `medias` / `posts` layout, which jff-scraper
+deliberately mirrors (numeric `model_id`, `posted_at`). jff-scraper then adds
+two tables of its own, and every accessor for them degrades gracefully so an
+OF-Scraper database reads through the identical code path:
 
-- ``jff_posts`` -- one row per post with the real ``post_url``
-  (``justfor.fans/<creator>?Post=...``), the JFF ``tags`` (a JSON array), the
+- ``jff_posts`` -- one row per post carrying the real ``post_url``
+  (``justfor.fans/<creator>?Post=...``), the site ``tags`` (a JSON array), the
   ``tier`` (Free/Paid), ``access_control``, ``store_url`` and ``pinned``.
-- ``schema_flags`` -- a ``source`` flag whose value is ``jff``; the sync only
-  processes databases marked this way, so pointing it at a path that also holds
-  an OF-Scraper database won't mangle the latter.
+  Absent on an OF-Scraper database, where ``post_url()`` returns None,
+  ``hashtags()`` returns [] and ``tier()``/``is_pinned()`` return None/False.
+- ``schema_flags`` -- a ``source`` flag (e.g. ``jff``). ``source()`` returns None
+  for an OF-Scraper database, which is what selects the OnlyFans profile.
 
-Databases are opened read-only so a running scraper or a locked file never causes
-a write or "readonly database" error.
+It also still detects the *older* OF-Scraper layout at open time
+(``_detect_schema``): no ``medias.model_id``, the post date in ``created_at``
+rather than ``posted_at``, and an empty ``profiles`` table (the creator name is
+then recovered from ``medias.directory``).
+
+Databases are opened read-only so a concurrently running scraper, or a locked
+file, never causes a write or "readonly database" error.
 """
 
 import glob
@@ -22,7 +29,7 @@ import os
 import sqlite3
 
 
-class JFFDatabase:
+class SourceDatabase:
     # Post text can live in any of these tables, all sharing the same columns.
     TEXT_TABLES = ["posts", "stories", "messages", "others", "products"]
 

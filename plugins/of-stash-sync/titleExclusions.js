@@ -1,4 +1,4 @@
-// OnlyFans Metadata Sync -- Title Exclusions editor.
+// Fan Site Metadata Sync -- Title Exclusions editor.
 //
 // A list editor for the plugin's `titleExclusions` setting -- the phrases /
 // regexes stripped from generated scene/image/gallery titles.
@@ -153,7 +153,7 @@
 
     return React.createElement("div",
       { className: "container-fluid", style: { padding: "1.5rem", maxWidth: "760px" } },
-      React.createElement("h4", null, "OnlyFans Sync — Title Exclusions"),
+      React.createElement("h4", null, "Fan Site Sync — Title Exclusions"),
       React.createElement("p", { className: "text-muted" },
         "Phrases or regular expressions removed from generated scene, image and " +
         "gallery titles. The description/details keeps the original post text. " +
@@ -184,10 +184,10 @@
       if (!Setting) return props;
       var heading = Link
         ? React.createElement(Link, { to: ROUTE },
-            React.createElement(Button, null, "OnlyFans Sync: Title Exclusions"))
+            React.createElement(Button, null, "Fan Site Sync: Title Exclusions"))
         : React.createElement(Button, {
             onClick: function () { window.location.href = ROUTE; },
-          }, "OnlyFans Sync: Title Exclusions");
+          }, "Fan Site Sync: Title Exclusions");
       return [{
         children: React.createElement(
           React.Fragment, null,

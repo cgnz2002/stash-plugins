@@ -176,18 +176,32 @@ class StashClient:
         return self.call(query)["findPerformers"]["performers"]
 
     def find_all_studios(self):
-        """Every studio (id, name, aliases), fetched once so the per-creator
-        studio lookup is an in-memory map hit instead of a query each. Aliases are
-        included so resolution is alias-aware (Stash enforces studio uniqueness
-        across names and aliases)."""
+        """Every studio (id, name, aliases, image_path), fetched once so the
+        per-creator studio lookup is an in-memory map hit instead of a query each.
+        Aliases are included so resolution is alias-aware (Stash enforces studio
+        uniqueness across names and aliases).
+
+        `image_path` is included to spot studios with no image: Stash's URL
+        builder appends `&default=true` to the path when the studio has none
+        (GetStudioImageURL), which is how the logo is back-filled onto studios
+        created before the plugin shipped an icon -- without ever replacing an
+        image that is actually set."""
         query = """
         query AllStudios {
             findStudios(filter: { per_page: -1 }) {
-                studios { id name aliases }
+                studios { id name aliases image_path }
             }
         }
         """
         return self.call(query)["findStudios"]["studios"]
+
+    def update_studio(self, studio_input):
+        query = """
+        mutation StudioUpdate($input: StudioUpdateInput!) {
+            studioUpdate(input: $input) { id }
+        }
+        """
+        self.call(query, {"input": studio_input})
 
     def find_performer(self, performer_id):
         """Return {'name', 'alias_list'} for a performer id, or None. Used to map
@@ -321,7 +335,7 @@ class StashClient:
         query = """
         query FindGalleries($f: GalleryFilterType!) {
             findGalleries(gallery_filter: $f, filter: { per_page: -1 }) {
-                galleries { id urls tags { id } performers { id } }
+                galleries { id code urls tags { id } performers { id } }
             }
         }
         """

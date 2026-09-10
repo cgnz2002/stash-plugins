@@ -1,16 +1,24 @@
-name: OnlyFans Metadata Sync
-description: Sync OF-Scraper metadata (title, details, date, URL, performers, studio) from user_data.db files into matching Stash scenes and images, and group each post's media into a gallery (linked to the post's scene).
-version: 1.14.0
+name: Fan Site Metadata Sync (OnlyFans + JustFor.Fans)
+description: Sync scraped metadata (title, details, date, post URL, performers, studio, tags) from OF-Scraper and jff-scraper user_data.db files into matching Stash scenes and images, group each post's media into a gallery, and adopt the galleries Stash makes from scanned image folders. Each database's site is detected from the database itself.
+version: 2.0.0
 url: https://github.com/cgnz2002/stash-plugins
 
 settings:
   dataPath:
-    displayName: OF-Scraper Data Path
-    description: "Directory (as seen inside the Stash container) searched recursively for OF-Scraper user_data.db files. Example: /data/only fans"
+    displayName: OnlyFans Data Path
+    description: "Directory (as seen inside the Stash container) searched recursively for OF-Scraper user_data.db files. Leave blank if you have no OnlyFans library. Example: /data/only fans"
     type: STRING
   parentStudioName:
-    displayName: Parent Studio Name
-    description: "Name of the top-level OnlyFans studio. Per-creator studios are created beneath it. Default: OnlyFans (network)"
+    displayName: OnlyFans Parent Studio
+    description: "Name of the top-level OnlyFans studio. Per-creator studios are created beneath it. It must already exist in Stash. Default: OnlyFans (network)"
+    type: STRING
+  jffDataPath:
+    displayName: JustFor.Fans Data Path
+    description: "Directory (as seen inside the Stash container) searched recursively for jff-scraper user_data.db files. Leave blank if you have no JustFor.Fans library. Example: /data/justforfans"
+    type: STRING
+  jffParentStudioName:
+    displayName: JustFor.Fans Parent Studio
+    description: "Name of the top-level JustFor.Fans studio. Per-creator studios are created beneath it. It must already exist in Stash. Default: JustForFans (network)"
     type: STRING
   maxTitleLength:
     displayName: Max Title Length
@@ -42,11 +50,11 @@ settings:
     type: NUMBER
   titleExclusions:
     displayName: Title Exclusions
-    description: "Phrases or regular expressions to strip from generated scene/image/gallery TITLES. The details/description field is left untouched (it keeps the original post text). Each entry is matched case-insensitively anywhere in the title and removed, then leftover separators are tidied -- e.g. an entry 'new collab:' turns the title 'New collab: Beach day' into 'Beach day' while the description stays as written. Best edited with the list editor: Settings > Tools > 'OnlyFans Sync: Title Exclusions' (add/remove rows, then Save). This field is a fallback -- you can also type one pattern here or paste a JSON array."
+    description: "Phrases or regular expressions to strip from generated scene/image/gallery TITLES. The details/description field is left untouched (it keeps the original post text). Each entry is matched case-insensitively anywhere in the title and removed, then leftover separators are tidied -- e.g. an entry 'new collab:' turns the title 'New collab: Beach day' into 'Beach day' while the description stays as written. Best edited with the list editor: Settings > Tools > 'Fan Site Sync: Title Exclusions' (add/remove rows, then Save). This field is a fallback -- you can also type one pattern here or paste a JSON array."
     type: STRING
   crewTagId:
     displayName: Crew Tag ID
-    description: "The Stash tag ID that marks crew performers (directors/photographers). Find it in the tag's page URL, e.g. .../tags/42 means the ID is 42. Any performer with this tag -- the creator or a collaborator credited by @mention or profile URL (onlyfans.com/username) -- is credited in each scene's Director field and each image's Photographer field instead of the performers list; the studio still follows the media's source, and if a post's only credits are crew the creator is added as a performer so nothing is left empty. Leave empty to disable crew handling."
+    description: "The Stash tag ID that marks crew performers (directors/photographers). Find it in the tag's page URL, e.g. .../tags/42 means the ID is 42. Any performer with this tag -- the creator or a collaborator credited by @mention or profile URL (onlyfans.com/username or justfor.fans/username) -- is credited in each scene's Director field and each image's Photographer field instead of the performers list; the studio still follows the media's source, and if a post's only credits are crew the creator is added as a performer so nothing is left empty. Leave empty to disable crew handling."
     type: STRING
 
 exec:
@@ -61,23 +69,23 @@ ui:
     - titleExclusions.js
 
 tasks:
-  - name: Sync OF Metadata
-    description: Sync metadata to unorganized OnlyFans scenes and images, and group each post's media into a gallery (linked to the post's scene).
+  - name: Sync Metadata
+    description: Sync metadata to unorganized scenes and images across every configured site, group each post's media into a gallery, and adopt Stash's scanned-folder galleries.
     defaultArgs:
       mode: sync
-  - name: Full Sync OF Metadata
-    description: Re-sync ALL OnlyFans scenes and images (ignoring the organized flag) and refresh the per-post galleries.
+  - name: Full Sync Metadata
+    description: Re-sync ALL scenes and images across every configured site (ignoring the organized flag) and refresh the galleries.
     defaultArgs:
       mode: full
-  - name: Tag OF From Text
-    description: Add tags (the OnlyFans tag plus any from post text) to ALL OnlyFans scenes, images and galleries. Only adds tags, leaves every other field untouched. Safe for manually edited scenes.
+  - name: Tag From Text
+    description: Add tags (each site's tag, the post's hashtags, paid/pinned, plus any matched from post text) to ALL synced scenes, images and galleries. Only adds tags, leaves every other field untouched. Safe for manually edited scenes.
     defaultArgs:
       mode: tag
   - name: Update Crew
-    description: Re-apply only the crew logic to ALL OnlyFans scenes and images - move director/photographer-tagged people into the director/photographer field and out of the performers list. Leaves titles, dates, studios, tags and everything else untouched. Use after tagging new performers as crew, to avoid a full re-sync.
+    description: Re-apply only the crew logic to ALL synced scenes and images - move director/photographer-tagged people into the director/photographer field and out of the performers list. Leaves titles, dates, studios, tags and everything else untouched. Use after tagging new performers as crew, to avoid a full re-sync.
     defaultArgs:
       mode: crew
   - name: Sync Performer
-    description: Full re-sync of a SINGLE OnlyFans performer. Triggered by the "Sync OnlyFans" button on a performer's page (it passes the performer id); running it here without one does nothing.
+    description: Full re-sync of a SINGLE performer, across every configured site. Triggered by the "Sync Fan Sites" button on a performer's page (it passes the performer id); running it here without one does nothing.
     defaultArgs:
       mode: performer

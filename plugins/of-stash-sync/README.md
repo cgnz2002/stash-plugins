@@ -1,14 +1,40 @@
-# OnlyFans Metadata Sync (Stash plugin)
+# Fan Site Metadata Sync (Stash plugin)
 
-A native [Stash](https://stashapp.cc) plugin that syncs metadata scraped by
-[OF-Scraper](https://github.com/datawhores/OF-Scraper) into matching Stash
-scenes and images. It reads OF-Scraper's `user_data.db` files and writes title,
-details, date, URL, performers and studio onto the corresponding media, then
-marks them organized.
+A native [Stash](https://stashapp.cc) plugin that syncs scraped fan-site
+metadata into matching Stash scenes and images. It reads the `user_data.db`
+files written by **[OF-Scraper](https://github.com/datawhores/OF-Scraper)**
+(OnlyFans) and **jff-scraper** (JustFor.Fans) and writes title, details, date,
+post URL, performers, studio and tags onto the corresponding media, then marks
+them organized.
 
-This is a native re-implementation of
+**One task covers every site.** Which site a database belongs to is read from
+the database itself, so you don't pick a mode — point the plugin at each
+library's path and run one sync. See [Multiple sites](#multiple-sites).
+
+The OnlyFans half is a native re-implementation of
 [`timekillerj/ofscraper-stash-sync`](https://github.com/timekillerj/ofscraper-stash-sync),
 moved inside Stash so there is no separate container or `config.ini`.
+
+## Multiple sites
+
+Set the data path for each site you have (leave the other blank) and everything
+else is shared — one Sync, one Full Sync, one set of tags/crew/title rules.
+
+Each database declares its own site, so a path holding both kinds of library
+sorts itself out and nothing has to be configured twice. What differs per site
+is only what has to:
+
+| | OnlyFans | JustFor.Fans |
+|---|---|---|
+| Post URL | rebuilt from the post id | read from the link the scraper captured (JFF URLs carry an encoded key and can't be rebuilt) |
+| Studio | `<user> (OnlyFans)` | `<user> (JustForFans)` |
+| Site tag | `OnlyFans` | `JustFor.Fans` |
+| Paid content | post price > 0 | the scraper's Free/**Paid** tier (JFF has no price, so a price rule would never fire) |
+| Scene `code` | filename stem (OF-Scraper names files by media id) | the post id (jff-scraper names files `<date> - <post id> - <desc>`) |
+| Extra tags | — | the post's own hashtags, and `pinned` |
+
+The same creator on both sites gets a separate studio for each, and both are
+synced in one run.
 
 ## What it does
 
@@ -99,8 +125,10 @@ Both current and older OF-Scraper database layouts are supported.
 
 | Setting | Default | Description |
 |---|---|---|
-| OF-Scraper Data Path | (required) | Directory searched recursively for `user_data.db` files, as seen inside the Stash container (e.g. `/data/only fans`). |
-| Parent Studio Name | `OnlyFans (network)` | Top-level studio that per-creator studios are nested under. |
+| OnlyFans Data Path | (one path required) | Directory searched recursively for `user_data.db` files, as seen inside the Stash container (e.g. `/data/only fans`). |
+| OnlyFans Parent Studio | `OnlyFans (network)` | Top-level studio that per-creator studios are nested under. |
+| JustFor.Fans Data Path | (blank) | Directory searched recursively for jff-scraper `user_data.db` files (e.g. `/data/justforfans`). Leave blank if you have no JFF library. |
+| JustFor.Fans Parent Studio | `JustForFans (network)` | Top-level studio for JustFor.Fans creators. Must already exist in Stash. |
 | Max Title Length | `65` | Titles longer than this are truncated at a sentence or word boundary. |
 | Allow Multiple Performer Matches | off | If several performers match a username, attach all of them instead of skipping. |
 | Create Missing Performers | off | Create a sparse performer for the creator and any unmatched `@mentions` instead of skipping. |
@@ -108,7 +136,7 @@ Both current and older OF-Scraper database layouts are supported.
 | Sync Workers | `2` | How many scene/image/gallery writes to send to Stash at once. Stash is SQLite-backed and SQLite has a **single writer**, so parallel writes queue on the DB write lock rather than truly committing at once; a little concurrency hides latency but too much piles up transactions until they time out (and starves the rest of Stash). Writes retry automatically on transient "database is locked" / "FOREIGN KEY constraint" / "timed out" contention. **If you see those errors on a big Full Sync, lower this** — `1` (fully sequential) is safest. Range 1–16. |
 | Auto-tag From Post Text | off | Scan each post's text and attach any existing Stash tags whose name or alias appears in it. |
 | Skip Multi-file Scenes and Images | off | Sync and Full Sync skip any scene or image with more than one file (e.g. merged scenes), to protect their performers and metadata. Does not affect the Tag task. |
-| Title Exclusions | (empty) | Phrases/regexes stripped from generated **titles** only (the description keeps the original post text). Best edited via **Settings → Tools → "OnlyFans Sync: Title Exclusions"** (a list editor like Stash's scan Exclusions). See below. |
+| Title Exclusions | (empty) | Phrases/regexes stripped from generated **titles** only (the description keeps the original post text). Best edited via **Settings → Tools → "Fan Site Sync: Title Exclusions"** (a list editor like Stash's scan Exclusions). See below. |
 | Crew Tag ID | (empty) | The Stash tag **ID** (from the tag's URL, e.g. `.../tags/42` → `42`) marking crew performers. A performer with this tag has their name put in each scene's Director field and each image's Photographer field instead of the performers list. Applies to the creator and any collaborator credited by `@mention` or profile URL (`onlyfans.com/username`). Empty disables crew handling. |
 
 ## Tasks
@@ -116,16 +144,16 @@ Both current and older OF-Scraper database layouts are supported.
 Run these from **Settings -> Tasks** (or schedule them). Scan your library in
 Stash first so the scenes and images exist.
 
-- **Sync OF Metadata** - sync only unorganized OnlyFans scenes and images.
-- **Full Sync OF Metadata** - re-sync everything, ignoring the organized flag.
-- **Tag OF From Text** - add tags to ALL OnlyFans scenes, images **and galleries**
+- **Sync Metadata** - sync only unorganized scenes and images, across every configured site.
+- **Full Sync Metadata** - re-sync everything, ignoring the organized flag.
+- **Tag From Text** - add tags to ALL synced scenes, images **and galleries**
   (organized or not): the `OnlyFans` tag plus any tags matched from the post text.
   This only *adds* tags; it never changes title, details, date, performers, studio
   or any other field, and never removes existing tags. Use this to tag media
   without a full re-sync overwriting manual edits. It always matches tags from
   text regardless of the *Auto-tag From Post Text* setting.
 - **Sync Performer** - a full re-sync scoped to a **single** performer. You don't
-  run this from the Tasks page; instead a **"Sync OnlyFans" button** is added to
+  run this from the Tasks page; instead a **"Sync Fan Sites" button** is added to
   each performer's page (via the plugin's UI JavaScript). Clicking it re-syncs
   just that performer -- handy for fixing one creator's titles/details or
   rebuilding their galleries without a library-wide Full Sync. The performer's
@@ -173,7 +201,7 @@ title>`. **Title Exclusions** is a list of phrases/regexes that are stripped fro
 the generated **title** — and only the title. The **description/details keeps the
 original post text**, so nothing is lost.
 
-Edit the list from **Settings → Tools → "OnlyFans Sync: Title Exclusions"**. That
+Edit the list from **Settings → Tools → "Fan Site Sync: Title Exclusions"**. That
 opens a list editor (a row per pattern with add/remove, then **Save**). Add
 `new collab:` and the title `New collab: Beach day` becomes `Beach day`, while the
 description is unchanged.

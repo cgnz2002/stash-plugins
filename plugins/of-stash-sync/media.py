@@ -1,8 +1,10 @@
-"""Turn OF-Scraper post text and media rows into Stash metadata.
+"""Turn scraped post text and media rows into Stash metadata.
 
-Title/details handling matches the original ofscraper-stash-sync tool. The only
-behavioural change is that the third-party `emojis` dependency is replaced with
-a small standard-library emoji detector so the plugin stays dependency-free.
+Site-agnostic: the same title/details handling, emoji-aware truncation, tag
+matching and title exclusions serve every source the plugin syncs. Title/details
+handling matches the original ofscraper-stash-sync tool. The only behavioural
+change from it is that the third-party `emojis` dependency is replaced with a
+small standard-library emoji detector so the plugin stays dependency-free.
 """
 
 import html
@@ -32,14 +34,20 @@ _MENTION_RE = re.compile(
     r"(?:^|\s|>)@([\w\-]+(?:\.[\w\-]+)*)(?=[\s\.\?\!…<,:;]|$)"
 )
 
-# Profile links to a collaborator, e.g. onlyfans.com/ChicagoNerd (with or
-# without scheme/www/trailing punctuation). Some creators credit a collaborator
-# with a bare profile URL instead of an @mention, so these are treated as
-# mentions too. The captured first path segment is the username. Post URLs have
-# the form onlyfans.com/<postid>/<username> (a numeric first segment), so purely
-# numeric captures are filtered out in parse_mentions to avoid matching a post id.
+# Profile links to a collaborator, e.g. onlyfans.com/ChicagoNerd or
+# justfor.fans/ChicagoNerd (with or without scheme/www/trailing punctuation).
+# Some creators credit a collaborator with a bare profile URL instead of an
+# @mention, so these are treated as mentions too. Both sites are matched
+# regardless of which one the post came from -- a creator on one site linking a
+# collaborator's profile on the other is still a real credit.
+#
+# The captured first path segment is the username. An OnlyFans *post* URL is
+# onlyfans.com/<postid>/<username> (a numeric first segment), so purely numeric
+# captures are filtered out in parse_mentions; a JustFor.Fans post link is
+# justfor.fans/<username>?Post=<key>, whose first segment already is the
+# username (the query string is not part of the capture).
 _PROFILE_URL_RE = re.compile(
-    r"onlyfans\.com/([A-Za-z0-9_\.\-]+)", re.IGNORECASE
+    r"(?:onlyfans\.com|justfor\.fans)/([A-Za-z0-9_\.\-]+)", re.IGNORECASE
 )
 
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -168,11 +176,12 @@ class MediaProcessor:
         """Collaborators credited in the post text.
 
         Picks up both `@mentions` and bare profile links
-        (`onlyfans.com/<username>`), since some creators link a collaborator by
-        URL instead of an @mention. A profile URL's username is its first path
-        segment; a post URL (`onlyfans.com/<postid>/<username>`) has a numeric
-        first segment, so purely-numeric captures are skipped to avoid mistaking
-        a post id for a username.
+        (`onlyfans.com/<username>` or `justfor.fans/<username>`), since some
+        creators link a collaborator by URL instead of an @mention. A profile
+        URL's username is its first path segment; an OnlyFans post URL
+        (`onlyfans.com/<postid>/<username>`) has a numeric first segment, so
+        purely-numeric captures are skipped to avoid mistaking a post id for a
+        username.
         """
         mentions = []
         for match in _MENTION_RE.findall(text):

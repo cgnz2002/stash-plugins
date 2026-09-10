@@ -1,4 +1,4 @@
-// OnlyFans Metadata Sync -- performer-page button.
+// Fan Site Metadata Sync -- performer-page button.
 //
 // Adds a "Sync OnlyFans" button to each performer's page that triggers a full
 // re-sync scoped to that one performer. The button only needs the performer id;
@@ -17,7 +17,7 @@
 
   var PLUGIN_ID = "of-stash-sync";
   var TASK_NAME = "Sync Performer";
-  var BTN_ID = "of-sync-performer-btn";
+  var BTN_ID = "fansite-sync-performer-btn";
   var PluginApi = window.PluginApi;
 
   function performerIdFromPath() {
@@ -57,7 +57,7 @@
         console.error("[of-stash-sync] performer sync failed:", err);
         btn.textContent = "Sync failed";
         window.alert(
-          "OnlyFans sync failed: " + (err && err.message ? err.message : err)
+          "Sync failed: " + (err && err.message ? err.message : err)
         );
       })
       .finally(function () {
@@ -74,8 +74,8 @@
     btn.type = "button";
     btn.className = "btn btn-secondary";
     btn.style.marginLeft = "0.5rem";
-    btn.textContent = "Sync OnlyFans";
-    btn.title = "Full metadata re-sync for this performer";
+    btn.textContent = "Sync Fan Sites";
+    btn.title = "Full metadata re-sync for this performer, across every configured site";
     btn.addEventListener("click", function () {
       var id = performerIdFromPath();
       if (id) runSync(id, btn);
