@@ -148,9 +148,11 @@ manifest). At runtime:
   error level and marks the task failed). `main()` returns the error string;
   keep that contract when adding new fatal-exit paths.
 
-The four tasks are defined in the manifest and selected by `args.mode`:
+The five tasks are defined in the manifest and selected by `args.mode`. Each
+covers **every configured site** — the per-site data paths are all scanned in one
+run, so there is no per-site task:
 
-- `mode: sync` — only unorganized OnlyFans scenes/images. Also groups each post's
+- `mode: sync` — only unorganized scenes/images. Also groups each post's
   media into a gallery (2+ images, or an image + a video), linking the post's
   scene to the gallery (Stash relates scenes to galleries, not images). Galleries
   are keyed by post URL for idempotency; a plain sync only creates missing ones
@@ -159,15 +161,15 @@ The four tasks are defined in the manifest and selected by `args.mode`:
   the per-post galleries' metadata.
 - `mode: tag` — additive only; adds tags from post text, never touches other
   fields. Safe over manually edited media.
-- `mode: crew` — surgical crew-credit pass. For all OnlyFans media it moves
+- `mode: crew` — surgical crew-credit pass. For all synced media it moves
   crew-tagged people out of the performers list and into the scene `director` /
   image `photographer` field, leaving every other field untouched. Skips media
   that already match, and never creates performers (even with auto-create on).
 - `mode: performer` — a full re-sync scoped to one Stash performer. Requires a
   `performerId` arg (does nothing without it, so it never falls back to syncing
   everyone). It resolves that performer's name + `alias_list` and only processes
-  the `user_data.db` profile whose OF username matches — bridging the usual
-  display-name≠username gap. Triggered by the **"Sync OnlyFans" button** that the
+  the `user_data.db` profile whose site username matches, on any site — bridging
+  the usual display-name≠username gap. Triggered by the **"Sync Fan Sites" button** that the
   plugin's UI JavaScript (`performerSync.js`, wired via the manifest `ui:` block)
   injects on each performer page; the button calls the `runPluginTask` mutation
   with `{mode: performer, performerId}`.
@@ -184,14 +186,17 @@ The four tasks are defined in the manifest and selected by `args.mode`:
   `configuration { general { apiKey } }` with the still-valid cookie and, if a
   key exists, sends it as the `ApiKey` header on all later requests (API keys
   don't expire). Falls back to the cookie (with a warning) when no key is set.
-- **`OFDatabase` (of_database.py)** — opens `user_data.db` files **read-only**
-  (`mode=ro` URI) so a concurrently running OF-Scraper never causes a write or
-  "readonly database" error. Schema verified against **OF-Scraper 3.14.7**. Post
-  text is searched across the `posts`, `stories`, `messages`, `others`, and
-  `products` tables. It **detects the schema at open time** (`_detect_schema`) to
-  also support older OF-Scraper databases, which lack `medias.model_id`, store
-  the date in `created_at` instead of `posted_at`, and leave `profiles` empty
-  (the creator name is then recovered from `medias.directory`).
+- **`SourceDatabase` (source_database.py)** — opens `user_data.db` files
+  **read-only** (`mode=ro` URI) so a concurrently running scraper never causes a
+  write or "readonly database" error. Schema verified against **OF-Scraper
+  3.14.7** and jff-scraper. Post text is searched across the `posts`, `stories`,
+  `messages`, `others`, and `products` tables. It **detects the schema at open
+  time** (`_detect_schema`) to also support older OF-Scraper databases, which
+  lack `medias.model_id`, store the date in `created_at` instead of `posted_at`,
+  and leave `profiles` empty (the creator name is then recovered from
+  `medias.directory`). jff-scraper's extra tables are read through optional
+  accessors that degrade to empty on a database without them — see *Multi-site
+  architecture* above.
 - **`MediaProcessor` (media.py)** — turns post text into title/details, parses
   collaborator credits, derives studio code from filename, formats dates.
   `parse_mentions` picks up both `@mentions` **and** bare profile links
@@ -286,7 +291,8 @@ The four tasks are defined in the manifest and selected by `args.mode`:
   the Stash container with nothing installed. (This is why `media.py` has its own
   emoji regex instead of the `emojis` package.) Don't add `requirements.txt` or
   imports outside the stdlib.
-- **Databases are opened read-only.** Never change `OFDatabase` to open for write.
+- **Databases are opened read-only.** Never change `SourceDatabase` to open for
+  write.
 - **GraphQL fields must match the Stash schema** (currently v0.31.x). Verify any
   new field/query against the running Stash version before relying on it.
   Note the asymmetry: `director` exists only on scenes, `photographer` only on

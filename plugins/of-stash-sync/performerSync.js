@@ -1,10 +1,10 @@
 // Fan Site Metadata Sync -- performer-page button.
 //
-// Adds a "Sync OnlyFans" button to each performer's page that triggers a full
+// Adds a "Sync Fan Sites" button to each performer's page that triggers a full
 // re-sync scoped to that one performer. The button only needs the performer id;
-// the Python "Sync Performer" task maps it back to the OF username via the
+// the Python "Sync Performer" task maps it back to the site username via the
 // performer's name/aliases, so the display name doesn't have to equal the
-// username.
+// username. It searches every configured site, so one button covers them all.
 //
 // Patterns follow the Stash UI-plugin docs: navigation is detected with the
 // documented `stash:location` event (PluginApi.Event), the button is injected
