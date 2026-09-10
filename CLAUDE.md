@@ -241,6 +241,24 @@ The four tasks are defined in the manifest and selected by `args.mode`:
   exponential back-off; a socket read timeout is normalised to a `timed out`
   RuntimeError in `stash.py` (`REQUEST_TIMEOUT`, 300s) so it's caught by that
   retry instead of slipping past as a bare `TimeoutError`.
+- **Folder galleries** (`sync_folder_galleries`, in of-stash-sync *and*
+  jff-stash-sync) — Stash creates a gallery for every scanned folder of images.
+  Those are distinct from the per-post galleries the plugins build, and the
+  schema makes them safe to tell apart: **a folder gallery has a `folder`, a
+  plugin-made one does not** (`find_folder_galleries` filters on exactly that).
+  Each of a creator's folder galleries gets the creator's studio, the creator
+  performer, the site tag, and a title of
+  `<username> <Site> <MediaDir> (<category>)` — the category being the path
+  segments between the creator's directory and the media folder, without which
+  every image folder of one creator (Posts/Free, Posts/Paid, Messages/Free,
+  Archived/...) would collide on the same title. Deliberately **additive** for
+  performers and tags: a folder is not a post, so there is no authoritative cast
+  to replace with, and manual curation survives. Only title/studio are asserted,
+  under the usual organized rule (plain sync skips organized, full refreshes
+  all), and `build_folder_gallery_update` returns None when nothing would change
+  so re-runs write nothing. The creator is matched by whole **path segment**, not
+  substring, because Stash's `path` filter is a substring match and would
+  otherwise let `jake` claim `/data/jakeson/...`.
 - **Non-destructive sync** — by default a sync/full pass *replaces* a media's
   `performer_ids` and `tag_ids` with the post's derived values, so a Full Sync
   drops manually-added performers/tags. The **Keep Manual Performers & Tags**

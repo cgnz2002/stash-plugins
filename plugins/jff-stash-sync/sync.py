@@ -898,6 +898,121 @@ def tag_post_galleries(client, db, profile, processor, tags, tag_matcher, worker
     run_writes(tasks, workers, totals)
 
 
+def folder_gallery_title(username, folder_path):
+    """A readable title for a scanned image folder, e.g.
+    "jake_od OnlyFans Images (Posts/Free)".
+
+    A creator has several media folders (Posts/Free/Images, Posts/Paid/Images,
+    Messages/..., Archived/...), so the path segments between the creator's own
+    directory and the media folder are kept as a qualifier -- without them every
+    one of those galleries would end up with the same title.
+    """
+    parts = [p for p in str(folder_path or "").replace("\\", "/").split("/") if p]
+    if not parts:
+        return "{} {} Images".format(username, DEFAULT_SITE_TAG)
+    kind = parts[-1]
+    lowered = [p.lower() for p in parts]
+    target = username.strip().lower()
+    context = []
+    if target in lowered:
+        # Last occurrence: the creator directory, not a coincidental match higher
+        # up the path (e.g. a data root that happens to share the name).
+        idx = len(lowered) - 1 - lowered[::-1].index(target)
+        context = parts[idx + 1:-1]
+    title = "{} {} {}".format(username, DEFAULT_SITE_TAG, kind)
+    if context:
+        title += " ({})".format("/".join(context))
+    return title
+
+
+def build_folder_gallery_update(gal, username, folder_path, studio_id,
+                                creator_ids, site_tag_id):
+    """Update for one scanned folder gallery, or None when nothing would change.
+
+    Deliberately ADDITIVE for performers and tags: a folder is not a post, so
+    there is no authoritative cast to replace the gallery's with, and anything
+    curated by hand should survive. Only the title and studio are asserted.
+    """
+    update = {"id": gal["id"]}
+
+    title = folder_gallery_title(username, folder_path)
+    if (gal.get("title") or "") != title:
+        update["title"] = title
+
+    if studio_id and ((gal.get("studio") or {}).get("id")) != studio_id:
+        update["studio_id"] = studio_id
+
+    existing_performers = [p["id"] for p in gal.get("performers") or []]
+    performer_ids = list(existing_performers)
+    for pid in creator_ids:
+        if pid not in performer_ids:
+            performer_ids.append(pid)
+    if performer_ids != existing_performers:
+        update["performer_ids"] = performer_ids
+
+    existing_tags = [t["id"] for t in gal.get("tags") or []]
+    if site_tag_id and site_tag_id not in existing_tags:
+        update["tag_ids"] = existing_tags + [site_tag_id]
+
+    if not gal.get("organized"):
+        update["organized"] = True
+
+    # Only "id" means the gallery already matches -- skip the write entirely.
+    return update if len(update) > 1 else None
+
+
+def sync_folder_galleries(client, profile, studio_id, creator_ids, tags,
+                          full_sync, workers, totals):
+    """Adopt the galleries Stash generates from scanned image folders.
+
+    Stash makes one gallery per scanned folder of images; unlike the per-post
+    galleries this plugin builds, they arrive with no performer, no studio and a
+    bare folder name for a title. This gives each of a creator's folder galleries
+    their performer, their studio and a readable title.
+
+    Follows the same organized idiom as the rest of the sync: a plain sync only
+    touches unorganized folder galleries, a full sync refreshes them all.
+    """
+    username = profile["username"]
+    site_tag_id = tags.resolve(DEFAULT_SITE_TAG) if tags else None
+    try:
+        galleries = client.find_folder_galleries(username)
+    except RuntimeError as e:
+        log.LogWarning(
+            "Could not list folder galleries for '{}': {}".format(username, e)
+        )
+        return
+
+    target = username.strip().lower()
+    tasks = []
+    for gal in galleries:
+        folder_path = (gal.get("folder") or {}).get("path") or ""
+        segments = [p.lower() for p in folder_path.replace("\\", "/").split("/") if p]
+        # The server-side path filter is a substring match, so confirm the
+        # creator's name is a whole path segment -- otherwise 'jake' would also
+        # claim '/data/jakeson/...'.
+        if target not in segments:
+            continue
+        if not full_sync and gal.get("organized"):
+            continue
+        update = build_folder_gallery_update(
+            gal, username, folder_path, studio_id, creator_ids, site_tag_id
+        )
+        if update:
+            tasks.append(_folder_gallery_task(client, update))
+
+    if tasks:
+        log.LogInfo("  {} folder gallery/galleries to update".format(len(tasks)))
+    run_writes(tasks, workers, totals)
+
+
+def _folder_gallery_task(client, update):
+    def task():
+        client.update_gallery(update)
+        return {"galleries": 1}
+    return task
+
+
 def process_profile(client, db, profile, processor, studios, performers, tags,
                     tag_matcher, full_sync, tag_only, crew_only, multiple_ok,
                     skip_multi_file, keep_manual_edits, workers, totals):
@@ -1040,6 +1155,12 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
             client, db, profile, processor, performers, tags, tag_matcher,
             studio_id, performer_ids, creator_roles, creator_name, full_sync,
             keep_manual_edits, workers, all_scenes, all_images, totals,
+        )
+        # Stash's own folder galleries (one per scanned image folder) arrive with
+        # no performer, studio or real title -- adopt them too.
+        sync_folder_galleries(
+            client, profile, studio_id, performer_ids, tags, full_sync,
+            workers, totals,
         )
 
 
