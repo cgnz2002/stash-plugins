@@ -148,9 +148,9 @@ the generated **title** — and only the title. The **description/details keeps 
 original post text**, so nothing is lost.
 
 Edit the list from **Settings → Tools → "OnlyFans Sync: Title Exclusions"**. That
-opens the same list editor as Stash's own scan **Exclusions** (a *Change* button →
-a modal with add/remove/reorder rows → *Confirm*). Add `new collab:` and the title
-`New collab: Beach day` becomes `Beach day`, while the description is unchanged.
+opens a list editor (a row per pattern with add/remove, then **Save**). Add
+`new collab:` and the title `New collab: Beach day` becomes `Beach day`, while the
+description is unchanged.
 
 How matching works:
 

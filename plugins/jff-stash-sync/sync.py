@@ -1,8 +1,14 @@
-"""Entry point for the OnlyFans Metadata Sync Stash plugin.
+"""Entry point for the JustFor.Fans Metadata Sync Stash plugin.
 
 Stash runs this as an external 'raw' plugin task: it sends a JSON payload on
 stdin (server connection + task args) and reads task output from stdout. We log
 progress and messages to the Stash log viewer via stderr (see log.py).
+
+Reads the databases written by jff-scraper. Their core is OF-Scraper-compatible
+(profiles/medias/posts), so this shares of-stash-sync's structure; the
+JustFor.Fans differences are the studio/tag names, the collaborator link domain,
+and above all the post URL -- a JFF post link carries an encoded key and cannot
+be rebuilt from the post id, so it is read from the scraper's `jff_posts` table.
 """
 
 import base64
@@ -14,17 +20,22 @@ from concurrent.futures import ThreadPoolExecutor
 
 import log
 from stash import StashClient
-from of_database import OFDatabase
+from jff_database import JFFDatabase
 from media import MediaProcessor, compile_name_pattern
 
 # Plugin id == the manifest filename without extension.
-PLUGIN_ID = "of-stash-sync"
+PLUGIN_ID = "jff-stash-sync"
 
-DEFAULT_PARENT_STUDIO = "OnlyFans (network)"
+DEFAULT_PARENT_STUDIO = "JustForFans (network)"
 DEFAULT_MAX_TITLE_LENGTH = 65
-# Tag added to every synced scene, image and gallery so all OnlyFans media is
+# Tag added to every synced scene, image and gallery so all JustFor.Fans media is
 # filterable by one tag. Created on first use if missing.
-DEFAULT_SITE_TAG = "OnlyFans"
+DEFAULT_SITE_TAG = "JustFor.Fans"
+# Per-creator studio name. Kept parallel to of-stash-sync's "<user> (OnlyFans)".
+STUDIO_SUFFIX = "JustForFans"
+# Only databases carrying this schema_flags source value are processed, so
+# pointing the plugin at a path that also holds an OF-Scraper database is safe.
+DB_SOURCE = "jff"
 # Stash is SQLite-backed and SQLite has a single writer, so parallel writes
 # don't actually commit concurrently -- they serialise on the DB write lock.
 # A little concurrency hides per-request latency, but too much just piles up
@@ -98,8 +109,24 @@ def get_setting(config, key, default):
     return value
 
 
-def of_url(username):
-    return "https://www.onlyfans.com/{}".format(username)
+def jff_url(username):
+    return "https://justfor.fans/{}".format(username)
+
+
+def jff_post_url(db, post_id, username):
+    """The post's real JustFor.Fans URL as captured by the scraper.
+
+    Unlike OnlyFans -- where a post link is just onlyfans.com/<postid>/<user> and
+    can be rebuilt from the id -- a JFF link carries an encoded key
+    (justfor.fans/<user>?Post=<key>), so it has to come from the scraper's
+    `jff_posts` table. When it wasn't captured we fall back to a stable synthetic
+    link so per-post galleries (which are keyed by URL) stay idempotent across
+    runs; it points at the creator and is unique per post.
+    """
+    url = db.post_url(post_id)
+    if url:
+        return url
+    return "{}#post-{}".format(jff_url(username), post_id)
 
 
 def parse_title_exclusions(raw):
@@ -230,11 +257,11 @@ class PerformerResolver:
                 names = ", ".join("'{}'".format(p["name"]) for p in near)
                 log.LogWarning(
                     "'{}' matches several existing performers ({}); not creating "
-                    "or attaching any. Add the OF username as an alias to the "
+                    "or attaching any. Add the JFF username as an alias to the "
                     "correct performer.".format(username, names)
                 )
             else:
-                new_id = self.client.create_performer(username, of_url(username))
+                new_id = self.client.create_performer(username, jff_url(username))
                 if new_id:
                     ids = [new_id]
                     self._register({"id": new_id, "name": username, "alias_list": [], "tags": []})
@@ -257,7 +284,7 @@ class StudioResolver:
             return
         self._map = {}
         # Key by name AND alias (mirroring TagResolver/PerformerResolver), so a
-        # per-creator studio whose "<username> (OnlyFans)" name already exists as
+        # per-creator studio whose "<username> (JustForFans)" name already exists as
         # another studio's alias resolves to it instead of hitting Stash's
         # name-already-exists error on create (Stash enforces studio uniqueness
         # across names and aliases).
@@ -272,14 +299,14 @@ class StudioResolver:
         if username in self.cache:
             return self.cache[username]
         self._ensure_map()
-        name = "{} (OnlyFans)".format(username)
+        name = "{} ({})".format(username, STUDIO_SUFFIX)
         studio_id = self._map.get(name.strip().lower())
         if not studio_id:
             studio_id = self.client.create_studio(
                 name,
                 self.parent_id,
-                of_url(username),
-                "Sub Studio for OnlyFans content creator",
+                jff_url(username),
+                "Sub Studio for JustFor.Fans content creator",
                 self.icon,
             )
             if studio_id:
@@ -290,7 +317,7 @@ class StudioResolver:
 
 
 class TagResolver:
-    """Resolve (and create if missing) plugin tags: the OnlyFans site tag and the
+    """Resolve (and create if missing) plugin tags: the JustFor.Fans site tag and the
     paid/archived status tags.
 
     Matching respects tag ALIASES, mirroring how performers are resolved. If the
@@ -364,7 +391,7 @@ def load_icon(server_connection):
     plugin_dir = server_connection.get("PluginDir")
     if not plugin_dir:
         plugin_dir = os.path.dirname(os.path.abspath(__file__))
-    icon_path = os.path.join(plugin_dir, "onlyfans.png")
+    icon_path = os.path.join(plugin_dir, "justforfans.png")
     if os.path.isfile(icon_path):
         with open(icon_path, "rb") as f:
             encoded = base64.b64encode(f.read()).decode("utf-8")
@@ -372,25 +399,51 @@ def load_icon(server_connection):
     return None
 
 
-def collect_tag_ids(processor, meta, text, tags, tag_matcher, site_tag=DEFAULT_SITE_TAG):
-    """Tag ids implied by a post: the site tag (always), plus paid/archived and
-    text matches. Applied to every synced scene, image and gallery; the surgical
-    crew pass never calls this, so it stays tag-free."""
+def collect_tag_ids(processor, meta, text, tags, tag_matcher, site_tag=DEFAULT_SITE_TAG,
+                    hashtags=None, tier=None, pinned=False):
+    """Tag ids implied by a post: the site tag (always), plus paid/archived/pinned,
+    the post's own JustFor.Fans hashtags, and text matches. Applied to every
+    synced scene, image and gallery; the surgical crew pass never calls this, so
+    it stays tag-free.
+
+    `tier` is the scraper's Free/Paid verdict and is what drives the 'paid' tag
+    here. OF-Scraper records a per-post price, so of-stash-sync tags paid on
+    `paid AND price > 0`; JustFor.Fans exposes no price, so those columns are
+    always 0 and that rule would never fire. The price rule is kept only as a
+    fallback for a database with no tier.
+
+    `hashtags` are the creator's explicit post hashtags (jff_posts.tags). Unlike
+    the fuzzy text matches -- which only ever attach tags that already exist --
+    these are deliberate metadata, so they are resolved through TagResolver and
+    created when missing (alias-aware, so a hashtag that is an alias of an
+    existing tag reuses it). Pass None/[] to skip them."""
     tag_ids = []
     if site_tag:
         tag_id = tags.resolve(site_tag)
         if tag_id:
             tag_ids.append(tag_id)
-    if meta:
+    is_paid = False
+    if tier:
+        is_paid = str(tier).strip().lower() == "paid"
+    elif meta:
         price = meta["price"] or 0
-        if meta["paid"] and price and int(price) > 0:
-            tag_id = tags.resolve("paid")
-            if tag_id:
-                tag_ids.append(tag_id)
-        if meta["archived"]:
-            tag_id = tags.resolve("archived")
-            if tag_id:
-                tag_ids.append(tag_id)
+        is_paid = bool(meta["paid"] and price and int(price) > 0)
+    if is_paid:
+        tag_id = tags.resolve("paid")
+        if tag_id:
+            tag_ids.append(tag_id)
+    if meta and meta["archived"]:
+        tag_id = tags.resolve("archived")
+        if tag_id:
+            tag_ids.append(tag_id)
+    if pinned:
+        tag_id = tags.resolve("pinned")
+        if tag_id and tag_id not in tag_ids:
+            tag_ids.append(tag_id)
+    for hashtag in hashtags or []:
+        tag_id = tags.resolve(hashtag)
+        if tag_id and tag_id not in tag_ids:
+            tag_ids.append(tag_id)
     if tag_matcher is not None and text:
         for tag_id in tag_matcher.match(processor.remove_html_tags(text)):
             if tag_id not in tag_ids:
@@ -407,7 +460,10 @@ def build_tag_only_update(db, processor, media_row, tags, tag_matcher,
     """
     meta = db.post_meta(media_row["post_id"])
     text = meta["text"] if (meta and meta["text"]) else ""
-    new_tags = collect_tag_ids(processor, meta, text, tags, tag_matcher)
+    new_tags = collect_tag_ids(processor, meta, text, tags, tag_matcher,
+                               hashtags=db.hashtags(media_row["post_id"]),
+                               tier=db.tier(media_row["post_id"]),
+                               pinned=db.is_pinned(media_row["post_id"]))
 
     merged = list(existing_tag_ids)
     added = 0
@@ -506,7 +562,6 @@ def build_update(db, processor, profile, media_row, creator_ids, studio_id,
                  keep_manual_edits=False):
     username = profile["username"]
     post_id = media_row["post_id"]
-    filename = media_row["filename"]
     date = processor.format_date(media_row["posted_at"])
 
     meta = db.post_meta(post_id)
@@ -541,7 +596,9 @@ def build_update(db, processor, profile, media_row, creator_ids, studio_id,
     if not performer_ids:
         performer_ids = list(creator_ids)
 
-    tag_ids = collect_tag_ids(processor, meta, text, tags, tag_matcher)
+    tag_ids = collect_tag_ids(processor, meta, text, tags, tag_matcher,
+                              hashtags=db.hashtags(post_id),
+                              tier=db.tier(post_id), pinned=db.is_pinned(post_id))
     # Non-destructive mode: keep any tags already on the media (manual tags)
     # instead of replacing the list; the post's tags are added alongside.
     if keep_manual_edits and existing_tag_ids:
@@ -551,7 +608,13 @@ def build_update(db, processor, profile, media_row, creator_ids, studio_id,
 
     update = {
         "title": title,
-        "code": processor.studio_code(filename),
+        # The post id, not the filename stem. of-stash-sync derives the code from
+        # the filename because OF-Scraper names files by media id, so the stem IS
+        # the id; jff-scraper names them "<date> - <post id> - <description>", so
+        # the stem would be a long useless string. The post id is the identifier
+        # that ties a scene to its filename, its JSON sidecar and its gallery
+        # (galleries carry the same value in their code).
+        "code": str(post_id),
         "date": date,
         "studio_id": studio_id,
         "performer_ids": performer_ids,
@@ -565,12 +628,15 @@ def build_update(db, processor, profile, media_row, creator_ids, studio_id,
         update["director"] = ", ".join(director_names)
     elif kind == "image" and photographer_names:
         update["photographer"] = ", ".join(photographer_names)
-    # Real posts have a numeric OF post id; profile/avatar/header assets use a
-    # hash and would produce a junk URL, so only set the URL for numeric ids.
-    if str(post_id).isdigit():
-        update["urls"] = [
-            "https://www.onlyfans.com/{}/{}".format(post_id, username)
-        ]
+    # Prefer the real JustFor.Fans post link the scraper captured; it carries an
+    # encoded key so it can't be rebuilt from the post id. Fall back to a stable
+    # synthetic link only for real (numeric) post ids -- profile/avatar assets use
+    # a hash and would produce a junk URL.
+    post_link = db.post_url(post_id)
+    if not post_link and str(post_id).isdigit():
+        post_link = jff_post_url(db, post_id, username)
+    if post_link:
+        update["urls"] = [post_link]
     return update, title
 
 
@@ -610,10 +676,18 @@ def _gallery_meta(db, processor, profile, post_id, group, performers, tags,
 
     gallery_input = {
         "title": title,
+        # The post id, stamped on the gallery so it can be correlated straight
+        # back to the post. A JustFor.Fans link is justfor.fans/<user>?Post=<key>
+        # and carries no post id, so (unlike OnlyFans) it can't be parsed out of
+        # the URL later -- this is the reliable route.
+        "code": str(post_id),
         "details": details,
         "studio_id": studio_id,
         "performer_ids": performer_ids,
-        "tag_ids": collect_tag_ids(processor, meta, text, tags, tag_matcher),
+        "tag_ids": collect_tag_ids(processor, meta, text, tags, tag_matcher,
+                                   hashtags=db.hashtags(post_id),
+                                   tier=db.tier(post_id),
+                                   pinned=db.is_pinned(post_id)),
         "urls": [url],
         "organized": True,
         # Crew are linked performers on galleries, so the free-text photographer
@@ -692,7 +766,7 @@ def build_post_galleries(client, db, profile, processor, performers, tags,
             continue
         if not post_id.isdigit():
             continue
-        url = "https://www.onlyfans.com/{}/{}".format(post_id, username)
+        url = jff_post_url(db, post_id, username)
         existing = by_url.get(url)
         if existing:
             gallery_input = None
@@ -745,27 +819,50 @@ def build_post_galleries(client, db, profile, processor, performers, tags,
 
 def tag_post_galleries(client, db, profile, processor, tags, tag_matcher, workers, totals):
     """Additive tag pass over the creator's per-post galleries: merge in the
-    OnlyFans (plus paid/archived/text) tags, leaving every other gallery field
+    JustFor.Fans (plus paid/archived/text) tags, leaving every other gallery field
     untouched. Used by the tag task, which otherwise doesn't touch galleries.
     """
     username = profile["username"]
     # Find (never create) the creator studio, so the tag task stays surgical.
-    studio_id = client.find_studio("{} (OnlyFans)".format(username))
+    studio_id = client.find_studio("{} ({})".format(username, STUDIO_SUFFIX))
     if not studio_id:
         return
+    # Each gallery carries its post id in `code` (stamped by _gallery_meta), so
+    # correlating a Stash gallery back to its post is a direct read. A JFF post
+    # link is justfor.fans/<user>?Post=<encoded key> and holds no post id, so --
+    # unlike OnlyFans -- it cannot be parsed out of the URL. For a gallery with no
+    # code (e.g. one created by hand) fall back to a url -> post id map, built
+    # lazily so the normal path costs nothing.
+    url_to_post = None
+
+    def post_id_for(gal):
+        nonlocal url_to_post
+        code = str(gal.get("code") or "").strip()
+        if code.isdigit():
+            return code
+        if url_to_post is None:
+            url_to_post = {}
+            seen_posts = set()
+            for row in db.medias_for_model(profile["user_id"]):
+                pid = row["post_id"]
+                if pid is None or pid in seen_posts:
+                    continue
+                seen_posts.add(pid)
+                url_to_post[jff_post_url(db, pid, username)] = str(pid)
+        for u in gal.get("urls") or []:
+            if u in url_to_post:
+                return url_to_post[u]
+        return None
+
     tasks = []
     for gal in client.find_galleries_for_studio(studio_id):
-        # Recover the post id from the gallery url (.../<post_id>/<username>).
-        post_id = None
-        for u in gal.get("urls") or []:
-            if "onlyfans.com" in u:
-                parts = u.rstrip("/").split("/")
-                if len(parts) >= 2 and parts[-2].isdigit():
-                    post_id = parts[-2]
-                    break
+        post_id = post_id_for(gal)
         meta = db.post_meta(post_id) if post_id else None
         text = meta["text"] if (meta and meta["text"]) else ""
-        new_tags = collect_tag_ids(processor, meta, text, tags, tag_matcher)
+        new_tags = collect_tag_ids(processor, meta, text, tags, tag_matcher,
+                                   hashtags=db.hashtags(post_id) if post_id else None,
+                                   tier=db.tier(post_id) if post_id else None,
+                                   pinned=db.is_pinned(post_id) if post_id else False)
 
         existing = [t["id"] for t in gal.get("tags") or []]
         merged = list(existing)
@@ -827,7 +924,7 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
     # always matches the mutation (scenes -> sceneUpdate, images -> imageUpdate).
     # Tag-only and full passes look at organized media too.
     # The skip-multi-file guard protects merged scenes (multiple files from
-    # different OF pages) from having their performers/metadata overwritten. It
+    # different JFF pages) from having their performers/metadata overwritten. It
     # only applies to the destructive sync tasks, not the additive tag pass.
     skip_multi = skip_multi_file and not tag_only
 
@@ -941,7 +1038,7 @@ def main():
     mode = args.get("mode")
     # 'performer' is a full re-sync scoped to a single Stash performer (triggered
     # from a performer's page). It behaves like a full sync but only for the
-    # profile(s) whose OF username matches that performer's name/aliases.
+    # profile(s) whose JFF username matches that performer's name/aliases.
     performer_scope = mode == "performer"
     full_sync = mode == "full" or performer_scope
     tag_only = mode == "tag"
@@ -990,11 +1087,11 @@ def main():
     workers = max(1, min(workers, 16))  # clamp: 1 = sequential, cap concurrency
 
     if not data_path:
-        msg = "No data path configured. Set 'OF-Scraper Data Path' in the plugin settings."
+        msg = "No data path configured. Set 'JFF Data Path' in the plugin settings."
         log.LogError(msg)
         return msg
 
-    # Scoped performer sync: map the Stash performer back to its OF username(s)
+    # Scoped performer sync: map the Stash performer back to its JFF username(s)
     # via name/aliases, so only that creator's profile is processed. Required for
     # 'performer' mode -- with no performerId we do NOT fall back to syncing
     # everyone (that would be the opposite of the intent).
@@ -1018,20 +1115,20 @@ def main():
         names = [performer.get("name") or ""] + (performer.get("alias_list") or [])
         scoped_usernames = {n.strip().lower() for n in names if n and n.strip()}
         log.LogInfo(
-            "Scoped sync for performer '{}' (id {}). Matching OF username(s): {}".format(
+            "Scoped sync for performer '{}' (id {}). Matching JFF username(s): {}".format(
                 performer.get("name"), performer_id,
                 ", ".join(sorted(scoped_usernames)) or "(none)")
         )
 
     if tag_only:
-        log.LogInfo("Starting OnlyFans tag-only pass. Data path: {}".format(data_path))
+        log.LogInfo("Starting JustFor.Fans tag-only pass. Data path: {}".format(data_path))
     elif crew_only:
-        log.LogInfo("Starting OnlyFans crew-credit pass. Data path: {}".format(data_path))
+        log.LogInfo("Starting JustFor.Fans crew-credit pass. Data path: {}".format(data_path))
     elif performer_scope:
-        log.LogInfo("Starting OnlyFans scoped performer re-sync. Data path: {}".format(data_path))
+        log.LogInfo("Starting JustFor.Fans scoped performer re-sync. Data path: {}".format(data_path))
     else:
         log.LogInfo(
-            "Starting OnlyFans {}metadata sync. Data path: {}".format(
+            "Starting JustFor.Fans {}metadata sync. Data path: {}".format(
                 "FULL " if full_sync else "", data_path
             )
         )
@@ -1047,7 +1144,7 @@ def main():
             log.LogError(msg)
             return msg
 
-    databases = OFDatabase.find_databases(data_path)
+    databases = JFFDatabase.find_databases(data_path)
     log.LogInfo("Found {} user_data.db file(s){}".format(
         len(databases), "" if workers <= 1 else " ({} parallel writers)".format(workers)))
     if not databases:
@@ -1078,9 +1175,20 @@ def main():
     for index, db_path in enumerate(databases):
         log.LogProgress(index / len(databases))
         try:
-            db = OFDatabase(db_path)
+            db = JFFDatabase(db_path)
         except Exception as e:
             log.LogError("Could not open {}: {}".format(db_path, e))
+            continue
+        # Only touch jff-scraper output. A user_data.db is also OF-Scraper's
+        # filename, so if the data path ever overlaps an OnlyFans library this
+        # keeps the JFF plugin from rewriting its studios/tags/URLs.
+        db_source = db.source()
+        if db_source != DB_SOURCE:
+            log.LogWarning(
+                "Skipping {}: not a jff-scraper database (source={}).".format(
+                    db_path, db_source or "unset")
+            )
+            db.close()
             continue
         try:
             profiles = db.profiles()

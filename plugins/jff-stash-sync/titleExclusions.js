@@ -1,4 +1,4 @@
-// OnlyFans Metadata Sync -- Title Exclusions editor.
+// JustFor.Fans Metadata Sync -- Title Exclusions editor.
 //
 // A list editor for the plugin's `titleExclusions` setting -- the phrases /
 // regexes stripped from generated scene/image/gallery titles.
@@ -23,9 +23,9 @@
   if (!PluginApi || !PluginApi.React) return;
 
   var React = PluginApi.React;
-  var PLUGIN_ID = "of-stash-sync";
+  var PLUGIN_ID = "jff-stash-sync";
   var KEY = "titleExclusions";
-  var ROUTE = "/plugins/of-stash-sync-titles";
+  var ROUTE = "/plugins/jff-stash-sync-titles";
 
   var libs = PluginApi.libraries || {};
   var Button =
@@ -153,7 +153,7 @@
 
     return React.createElement("div",
       { className: "container-fluid", style: { padding: "1.5rem", maxWidth: "760px" } },
-      React.createElement("h4", null, "OnlyFans Sync — Title Exclusions"),
+      React.createElement("h4", null, "JustFor.Fans Sync — Title Exclusions"),
       React.createElement("p", { className: "text-muted" },
         "Phrases or regular expressions removed from generated scene, image and " +
         "gallery titles. The description/details keeps the original post text. " +
@@ -175,7 +175,7 @@
       return React.createElement(TitleExclusionsPage);
     });
   } catch (e) {
-    console.error("[of-stash-sync] could not register title-exclusions route:", e);
+    console.error("[jff-stash-sync] could not register title-exclusions route:", e);
   }
 
   try {
@@ -184,10 +184,10 @@
       if (!Setting) return props;
       var heading = Link
         ? React.createElement(Link, { to: ROUTE },
-            React.createElement(Button, null, "OnlyFans Sync: Title Exclusions"))
+            React.createElement(Button, null, "JustFor.Fans Sync: Title Exclusions"))
         : React.createElement(Button, {
             onClick: function () { window.location.href = ROUTE; },
-          }, "OnlyFans Sync: Title Exclusions");
+          }, "JustFor.Fans Sync: Title Exclusions");
       return [{
         children: React.createElement(
           React.Fragment, null,
@@ -200,6 +200,6 @@
       }];
     });
   } catch (e) {
-    console.error("[of-stash-sync] could not patch SettingsToolsSection:", e);
+    console.error("[jff-stash-sync] could not patch SettingsToolsSection:", e);
   }
 })();

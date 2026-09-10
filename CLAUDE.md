@@ -17,7 +17,7 @@ Published source URL (add this in Stash → Settings → Plugins → Add Source)
 https://cgnz2002.github.io/stash-plugins/main/index.yml
 ```
 
-Currently there are two plugins:
+Currently there are three plugins:
 
 - **`plugins/of-stash-sync/`** — OnlyFans Metadata Sync. Syncs metadata scraped by
   [OF-Scraper](https://github.com/datawhores/OF-Scraper) (read from its
@@ -38,6 +38,12 @@ Currently there are two plugins:
   per-creator) and the creator performer are created if missing. A Patreon post
   has a single creator, so there is no @mention/crew handling and the title is
   used as-is. See that plugin's README for the pipeline.
+- **`plugins/jff-stash-sync/`** — JustFor.Fans Metadata Sync. The JFF sibling of
+  of-stash-sync, reading the `user_data.db` files written by **jff-scraper**.
+  That schema's core is deliberately OF-Scraper-compatible (`profiles`/`medias`/
+  `posts`, numeric `model_id`, `posted_at`), so the structure is shared; the
+  platform differences all come from the scraper's extra `jff_posts` table and
+  are listed under *jff-stash-sync specifics* below.
 
 ## Repository layout
 
@@ -62,17 +68,65 @@ plugins/
     media.py, log.py                 Copied from of-stash-sync
     README.md                        User-facing docs + pipeline diagram
     patreon.png                      Studio icon
+  jff-stash-sync/
+    jff-stash-sync.yml               Plugin manifest (same task modes as of-stash-sync)
+    sync.py                          Orchestration (of-stash-sync's, with the JFF differences)
+    jff_database.py                  Reader for jff-scraper user_data.db (+ jff_posts)
+    stash.py, media.py, log.py       Copied from of-stash-sync (media.py: justfor.fans links)
+    performerSync.js, titleExclusions.js  UI plugins (same pattern, JFF ids/labels)
+    README.md                        User-facing docs
 ```
+
+### jff-stash-sync specifics
+
+Everything else matches of-stash-sync; these are the real differences, and each
+exists because of something the platform or the scraper does:
+
+- **Post URL** — a JFF link is `justfor.fans/<user>?Post=<encoded key>`, so unlike
+  OnlyFans it **cannot be rebuilt from the post id**. `jff_post_url()` reads the
+  real URL from `jff_posts.post_url`, falling back to a stable synthetic
+  `justfor.fans/<user>#post-<id>` so per-post galleries (keyed by URL) stay
+  idempotent.
+- **Post id on galleries and media** — since the post id isn't in the URL, it is
+  stamped into the **`code`** field of galleries *and* scenes/images, and the tag
+  pass reads `gallery.code` to correlate a gallery back to its post (falling back
+  to a lazily built url→post map). Note of-stash-sync instead derives a scene's
+  `code` from the filename stem, which works there only because OF-Scraper names
+  files by media id; jff-scraper names them `<date> - <post id> - <description>`.
+  `code` is a valid field on `Gallery`/`GalleryCreateInput`/`GalleryUpdateInput`
+  (verified against the schema).
+- **Paid** — JFF has no per-post price, so `posts.paid`/`price` are always `0` and
+  of-stash-sync's `paid AND price > 0` rule would never fire. The `jff_posts.tier`
+  column (Free/Paid) drives the `paid` tag instead; the price rule remains only as
+  a fallback for a database with no tier.
+- **Hashtags / pinned** — `jff_posts.tags` (a JSON array) are synced as tags and
+  **created if missing** (they are deliberate creator metadata, unlike the fuzzy
+  text matches which only attach existing tags); `jff_posts.pinned` adds a
+  `pinned` tag.
+- **Collaborators** — `media.py`'s profile-link regex matches `justfor.fans/<user>`
+  rather than `onlyfans.com/<user>`.
+- **Which databases** — `user_data.db` is also OF-Scraper's filename, so the sync
+  only processes databases whose `schema_flags` row says `source = jff` (checked
+  via `JFFDatabase.source()`) and skips others with a warning.
+- **Performance** — `jff_posts` is bulk-loaded once per creator into a dict
+  (`_ensure_jff_index`), because each post needs several of its fields and a query
+  per field would be four round-trips per post.
+- The scraper's per-post `.json` sidecars are deliberately **not** read: the DB
+  already holds everything, and per-post file reads are what made an early version
+  of the Patreon plugin time out.
 
 of-stash-sync also ships two UI-JS plugins (wired via the manifest `ui:` block):
 `performerSync.js` (the per-performer "Sync OnlyFans" button) and
 `titleExclusions.js` (a list editor for the `titleExclusions` setting). The
-latter reuses **Stash's own** `PluginApi.components.StringListSetting` — the same
-widget as Settings → Library → Exclusions — surfaced via `register.route` plus a
-`patch.before("SettingsToolsSection")` button (the CommunityScripts/AIOverhaul
-pattern), and persists the list with the `configurePlugin` mutation (read back by
-`sync.py` from `configuration { plugins }`). Values are stored as a JSON string so
-the manifest `titleExclusions` STRING field stays a hand-editable fallback.
+latter is surfaced via `register.route` plus a `patch.before("SettingsToolsSection")`
+button (the CommunityScripts/AIOverhaul pattern), and persists the list with the
+`configurePlugin` mutation (read back by `sync.py` from `configuration { plugins }`).
+Values are stored as a JSON string so the manifest `titleExclusions` STRING field
+stays a hand-editable fallback. **It deliberately does NOT reuse Stash's
+`StringListSetting`/`StringListInput`**: those (and their `Setting`/`ModalSetting`
+wrappers) call `useSettings()`, which throws `useSettings must be used within a
+SettingsContext` on a standalone plugin route — so the editor uses its own
+context-free rows editor (row-per-pattern + Save) instead.
 
 ## How the plugin runs
 
@@ -151,11 +205,13 @@ The four tasks are defined in the manifest and selected by `args.mode`:
   (separator-insensitive, word-bounded, case-insensitive).
 - **sync.py resolvers** — `PerformerResolver`, `StudioResolver`, `TagResolver`,
   `TagTextMatcher` each cache lookups and create-if-missing where appropriate.
-  `PerformerResolver` and `TagResolver` both build an in-memory index keyed by
-  lowercase **name *and* alias**, so a plugin tag such as `archived`/`paid`
-  resolves to an existing tag that carries the name as an alias instead of
-  hitting Stash's "name already exists" error on create (Stash enforces
-  uniqueness across tag names and aliases). Updates are routed by where the media
+  `PerformerResolver`, `TagResolver` and `StudioResolver` all build an in-memory
+  index keyed by lowercase **name *and* alias**, so a plugin tag such as
+  `archived`/`paid`, or a per-creator studio `<username> (OnlyFans)`, resolves to
+  an existing tag/studio that carries the name as an alias instead of hitting
+  Stash's "name already exists" error on create (Stash enforces uniqueness across
+  names and aliases for tags, performers and studios). `find_studio` (used for
+  the parent studio) is alias-aware for the same reason. Updates are routed by where the media
   actually lives in Stash (scene -> `sceneUpdate`, image -> `imageUpdate`).
 - **Performance** — resolvers bulk-fetch **all** performers/studios once into
   in-memory maps (`find_all_performers`/`find_all_studios`), so username->performer
