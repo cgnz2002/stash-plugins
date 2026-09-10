@@ -45,6 +45,32 @@ duplicate them; a plain Sync creates missing galleries and adds any new images
 (never overwriting a gallery you've edited), while Full Sync also refreshes their
 metadata.
 
+### Folder galleries (scanned image folders)
+
+When Stash scans a folder of images it creates a **gallery for that folder**.
+Those arrive with no performer, no studio and just the folder name for a title,
+so the Sync and Full Sync tasks adopt each of a creator's folder galleries:
+
+- **Title** → `<creator> OnlyFans Images (<category>)`, e.g.
+  `jake_od OnlyFans Images (Posts/Free)`. The category comes from the path
+  between the creator's folder and the media folder — without it every one of a
+  creator's image folders (Posts/Free, Posts/Paid, Messages/Free, Archived/...)
+  would end up with the same title.
+- **Studio** → the creator's `<username> (OnlyFans)` studio.
+- **Performer** → the creator, *added* to whoever is already on the gallery.
+- **Tag** → the `OnlyFans` tag, *added* to whatever tags are already there.
+
+These are kept strictly apart from the per-post galleries above: a folder
+gallery has a `folder` in Stash's schema and a plugin-made one does not, so the
+two can never be confused.
+
+Performers and tags here are **only ever added** — a folder isn't a post, so
+there's no authoritative cast to replace the gallery's with, and anything you
+curated by hand survives. Only the title and studio are asserted, and those
+follow the usual organized rule: a plain **Sync** leaves organized folder
+galleries alone, a **Full Sync** refreshes them all. A gallery that already
+matches isn't rewritten at all.
+
 Both current and older OF-Scraper database layouts are supported.
 
 ## Requirements

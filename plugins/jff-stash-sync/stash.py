@@ -176,18 +176,32 @@ class StashClient:
         return self.call(query)["findPerformers"]["performers"]
 
     def find_all_studios(self):
-        """Every studio (id, name, aliases), fetched once so the per-creator
-        studio lookup is an in-memory map hit instead of a query each. Aliases are
-        included so resolution is alias-aware (Stash enforces studio uniqueness
-        across names and aliases)."""
+        """Every studio (id, name, aliases, image_path), fetched once so the
+        per-creator studio lookup is an in-memory map hit instead of a query each.
+        Aliases are included so resolution is alias-aware (Stash enforces studio
+        uniqueness across names and aliases).
+
+        `image_path` is included to spot studios with no image: Stash's URL
+        builder appends `&default=true` to the path when the studio has none
+        (GetStudioImageURL), which is how the logo is back-filled onto studios
+        created before the plugin shipped an icon -- without ever replacing an
+        image that is actually set."""
         query = """
         query AllStudios {
             findStudios(filter: { per_page: -1 }) {
-                studios { id name aliases }
+                studios { id name aliases image_path }
             }
         }
         """
         return self.call(query)["findStudios"]["studios"]
+
+    def update_studio(self, studio_input):
+        query = """
+        mutation StudioUpdate($input: StudioUpdateInput!) {
+            studioUpdate(input: $input) { id }
+        }
+        """
+        self.call(query, {"input": studio_input})
 
     def find_performer(self, performer_id):
         """Return {'name', 'alias_list'} for a performer id, or None. Used to map
@@ -327,6 +341,38 @@ class StashClient:
         """
         variables = {"f": {"studios": {"value": [studio_id], "modifier": "INCLUDES"}}}
         return self.call(query, variables)["findGalleries"]["galleries"]
+
+    def find_folder_galleries(self, path):
+        """Galleries Stash generated from scanned folders whose path contains
+        `path`.
+
+        When Stash scans a folder of images it creates a gallery for that folder.
+        Those are a different thing from the per-post galleries this plugin
+        creates, and the schema makes them easy to tell apart: a folder gallery
+        has a `folder`, a plugin-made one does not. Only the former are returned,
+        so the two can never be confused for one another.
+
+        `path` is matched as a substring server-side, so callers must still check
+        the creator's name is a whole path segment before acting on a result.
+        """
+        query = """
+        query FindGalleries($f: GalleryFilterType!) {
+            findGalleries(gallery_filter: $f, filter: { per_page: -1 }) {
+                galleries {
+                    id
+                    title
+                    organized
+                    folder { path }
+                    studio { id }
+                    tags { id }
+                    performers { id }
+                }
+            }
+        }
+        """
+        variables = {"f": {"path": {"value": path, "modifier": "INCLUDES"}}}
+        galleries = self.call(query, variables)["findGalleries"]["galleries"]
+        return [g for g in galleries if g.get("folder")]
 
     def create_gallery(self, gallery_input):
         query = """

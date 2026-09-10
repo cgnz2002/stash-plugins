@@ -44,6 +44,32 @@ the post URL, so re-runs don't duplicate them; a plain Sync creates missing
 galleries and adds any new images (never overwriting a gallery you've edited),
 while Full Sync also refreshes their metadata.
 
+### Folder galleries (scanned image folders)
+
+When Stash scans a folder of images it creates a **gallery for that folder**.
+Those arrive with no performer, no studio and just the folder name for a title,
+so the Sync and Full Sync tasks adopt each of a creator's folder galleries:
+
+- **Title** → `<creator> JustFor.Fans Images (<category>)`, e.g.
+  `JaysonParker801 JustFor.Fans Images (Posts/Free)`. The category comes from the path
+  between the creator's folder and the media folder — without it every one of a
+  creator's image folders (Posts/Free, Posts/Paid, ...)
+  would end up with the same title.
+- **Studio** → the creator's `<username> (JustForFans)` studio.
+- **Performer** → the creator, *added* to whoever is already on the gallery.
+- **Tag** → the `JustFor.Fans` tag, *added* to whatever tags are already there.
+
+These are kept strictly apart from the per-post galleries above: a folder
+gallery has a `folder` in Stash's schema and a plugin-made one does not, so the
+two can never be confused.
+
+Performers and tags here are **only ever added** — a folder isn't a post, so
+there's no authoritative cast to replace the gallery's with, and anything you
+curated by hand survives. Only the title and studio are asserted, and those
+follow the usual organized rule: a plain **Sync** leaves organized folder
+galleries alone, a **Full Sync** refreshes them all. A gallery that already
+matches isn't rewritten at all.
+
 ## JustFor.Fans specifics
 
 These are the real differences from the OnlyFans plugin, all driven by what the
@@ -138,11 +164,20 @@ Each entry is a case-insensitive regex (a plain phrase works too), leftover
 separators are tidied, a title is never left empty, and an invalid regex is
 ignored with a warning rather than breaking the sync.
 
-### Studio icon (optional)
+### Studio logo
 
-Drop a `justforfans.png` into this plugin's folder and it is used as the image
-for per-creator studios it creates. Without one, studios are created without an
-image — everything else works the same.
+The plugin ships `justforfans.png` and uses it as the image for the per-creator
+studios it creates, the same way of-stash-sync uses the OnlyFans logo.
+
+Stash only accepts an image when a studio is **created**, so studios made before
+the logo shipped would otherwise stay blank. The sync therefore also **back-fills**
+it: any per-creator studio that Stash reports as having no image of its own gets
+the logo set once. A studio with an image already — including one you picked
+yourself — is never touched. Swap the logo by replacing `justforfans.png` in this
+plugin's folder.
+
+The **parent** studio is yours (the plugin only looks it up, never creates it), so
+set its image by hand if you want one.
 
 ## Notes
 
