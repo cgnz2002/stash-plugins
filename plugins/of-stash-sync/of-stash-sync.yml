@@ -1,6 +1,6 @@
 name: Fan Site Metadata Sync (OnlyFans + JustFor.Fans)
 description: Sync scraped metadata (title, details, date, post URL, performers, studio, tags) from OF-Scraper and jff-scraper user_data.db files into matching Stash scenes and images, group each post's media into a gallery, and adopt the galleries Stash makes from scanned image folders. Each database's site is detected from the database itself.
-version: 2.0.0
+version: 2.1.0
 url: https://github.com/cgnz2002/stash-plugins
 
 settings:
@@ -56,6 +56,10 @@ settings:
     displayName: Crew Tag ID
     description: "The Stash tag ID that marks crew performers (directors/photographers). Find it in the tag's page URL, e.g. .../tags/42 means the ID is 42. Any performer with this tag -- the creator or a collaborator credited by @mention or profile URL (onlyfans.com/username or justfor.fans/username) -- is credited in each scene's Director field and each image's Photographer field instead of the performers list; the studio still follows the media's source, and if a post's only credits are crew the creator is added as a performer so nothing is left empty. Leave empty to disable crew handling."
     type: STRING
+  sponsorTagId:
+    displayName: Sponsor Tag ID
+    description: "The Stash tag ID that marks SPONSOR performers (brands/advertisers). Find it in the tag's page URL, e.g. .../tags/42 means the ID is 42. Any performer with this tag -- the creator or a collaborator credited by @mention or profile URL -- is REMOVED from the performers list and the scene/image/gallery is tagged 'sponsored' instead, since Stash has no field to credit a sponsor in. Unlike crew, sponsors are dropped from galleries too. The 'sponsored' tag is created if missing (an existing tag with that name or alias is reused) and is only ever added, never removed. If a post's only credits are sponsors the creator is kept as a performer so nothing is left empty. Leave empty to disable sponsor handling."
+    type: STRING
 
 exec:
   - python
@@ -81,8 +85,8 @@ tasks:
     description: Add tags (each site's tag, the post's hashtags, paid/pinned, plus any matched from post text) to ALL synced scenes, images and galleries. Only adds tags, leaves every other field untouched. Safe for manually edited scenes.
     defaultArgs:
       mode: tag
-  - name: Update Crew
-    description: Re-apply only the crew logic to ALL synced scenes and images - move director/photographer-tagged people into the director/photographer field and out of the performers list. Leaves titles, dates, studios, tags and everything else untouched. Use after tagging new performers as crew, to avoid a full re-sync.
+  - name: Update Crew & Sponsors
+    description: Re-apply only the crew and sponsor logic to ALL synced scenes and images - move director/photographer-tagged people into the director/photographer field, and drop sponsor-tagged accounts from the performers list in favour of a 'sponsored' tag. Leaves titles, dates, studios and everything else untouched (the only tag change is adding 'sponsored'). Use after tagging new performers as crew or sponsors, to avoid a full re-sync.
     defaultArgs:
       mode: crew
   - name: Sync Performer
