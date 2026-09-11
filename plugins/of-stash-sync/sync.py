@@ -26,6 +26,11 @@ DEFAULT_MAX_TITLE_LENGTH = 65
 # setting all live on a SourceProfile (sources.py), picked per database from its
 # schema_flags source value -- that is what lets one sync serve several sites.
 
+# Put on media whose credits include a Sponsor-tagged account. Resolved through
+# TagResolver like 'paid'/'archived'/'pinned', so an existing tag carrying this
+# as a name OR an alias is reused rather than colliding on create.
+SPONSORED_TAG = "sponsored"
+
 # Stash is SQLite-backed and SQLite has a single writer, so parallel writes
 # don't actually commit concurrently -- they serialise on the DB write lock.
 # A little concurrency hides per-request latency, but too much just piles up
@@ -130,18 +135,23 @@ def parse_title_exclusions(raw):
 class PerformerResolver:
     """Find performers by name/alias, optionally creating missing ones."""
 
-    def __init__(self, client, auto_create, crew_tag_id=""):
+    def __init__(self, client, auto_create, crew_tag_id="", sponsor_tag_id=""):
         self.client = client
         self.auto_create = auto_create
         # Matched by tag id (stable) rather than name, so renaming the tag in
         # Stash doesn't silently disable crew handling. Empty disables it.
         self.crew_tag_id = str(crew_tag_id or "").strip()
+        # Same idea for sponsors: a performer carrying this tag is a brand/
+        # advertiser, not someone in the media, so they are dropped from the
+        # performers list and the media is tagged 'sponsored' instead.
+        self.sponsor_tag_id = str(sponsor_tag_id or "").strip()
         self.cache = {}
         # The site currently being processed; only used for the URL put on a
         # performer this resolver creates. Set per database by process_profile,
         # since databases are processed one at a time.
         self.source = sources.ONLYFANS
-        # username -> {"roles": set(), "name": str} for the crew-credit logic
+        # username -> {"roles": set(), "name": str, "sponsor": bool} for the
+        # crew-credit and sponsor logic
         self.info_cache = {}
         # lowercase name/alias -> [performers]; built once from a single bulk
         # fetch so the common "performer exists" path needs no per-username query.
@@ -188,6 +198,12 @@ class PerformerResolver:
             return set(), None
         return info["roles"], info["name"]
 
+    def is_sponsor(self, username):
+        """Whether a credited account carries the Sponsor Tag. resolve() must
+        have been called first (same contract as creator_credit)."""
+        info = self.info_cache.get(username.lower())
+        return bool(info and info.get("sponsor"))
+
     def resolve(self, username, from_mention=False, source=None):
         """Performer ids for a username, creating one if allowed.
 
@@ -208,17 +224,25 @@ class PerformerResolver:
         # record both roles when any matched performer carries the crew tag. The
         # credit uses the performer's display name (never the alias/username);
         # when several performers match, prefer the crew-tagged one's name.
+        # The sponsor flag is read in the same pass. Every match is inspected
+        # (rather than stopping at the first crew hit) so a performer can be
+        # both -- crew still takes the director/photographer credit, and the
+        # sponsored tag is applied alongside.
         roles = set()
         credit_name = None
+        sponsor = False
         for p in exact:
             ptag_ids = {t.get("id") for t in (p.get("tags") or [])}
-            if self.crew_tag_id and self.crew_tag_id in ptag_ids:
+            if self.sponsor_tag_id and self.sponsor_tag_id in ptag_ids:
+                sponsor = True
+            if self.crew_tag_id and self.crew_tag_id in ptag_ids and not roles:
                 roles = {"director", "photographer"}
                 credit_name = p.get("name")
-                break
         if credit_name is None and exact:
             credit_name = exact[0]["name"]
-        self.info_cache[key] = {"roles": roles, "name": credit_name}
+        self.info_cache[key] = {
+            "roles": roles, "name": credit_name, "sponsor": sponsor,
+        }
         if not ids and self.auto_create:
             # Stash treats EQUALS as a SQL LIKE, so a username containing '_'
             # (a wildcard) can collide with an existing performer name on
@@ -476,20 +500,35 @@ def build_tag_only_update(db, processor, media_row, tags, tag_matcher, source,
     return {"tag_ids": merged}, added
 
 
-def collect_crew(processor, resolver, text, creator_roles, creator_name, creator_ids):
-    """Split a post's credited people into crew and plain performers.
+def collect_crew(processor, resolver, text, creator_roles, creator_name,
+                 creator_ids, creator_sponsor=False):
+    """Split a post's credited people into crew, sponsors and plain performers.
 
-    Anyone tagged as crew (director/photographer) -- the creator or an @mentioned
-    collaborator -- belongs in the director/photographer field, not the
-    performers list. Returns (director_names, photographer_names, crew_ids,
-    mention_performer_ids), where crew_ids are the performer ids to keep out of
-    the performers list and mention_performer_ids are the non-crew @mentions.
+    Two kinds of credited account don't belong in the performers list, and both
+    can be the creator or a collaborator credited by @mention or profile link:
+
+    - **Crew** (director/photographer-tagged) move into the scene ``director`` /
+      image ``photographer`` field.
+    - **Sponsors** (Sponsor-tagged) are brands, not people in the media, so they
+      are simply dropped and the media gets the ``sponsored`` tag instead --
+      there is no Stash field to credit them in.
+
+    A performer can be both: crew still takes the director/photographer credit
+    and the sponsored tag is applied alongside.
+
+    Returns (director_names, photographer_names, crew_ids, mention_performer_ids,
+    sponsor_ids). crew_ids and sponsor_ids are the performer ids to keep out of
+    the performers list; mention_performer_ids are the credited accounts that are
+    neither.
     """
     crew = []          # (roles, display name)
     crew_ids = set()
+    sponsor_ids = set()
     if creator_roles and creator_name:
         crew.append((creator_roles, creator_name))
         crew_ids.update(creator_ids)
+    if creator_sponsor:
+        sponsor_ids.update(creator_ids)
 
     mention_performer_ids = []
     if text:
@@ -502,11 +541,14 @@ def collect_crew(processor, resolver, text, creator_roles, creator_name, creator
                 source=sources.profile_for_domain(domain),
             )
             m_roles, m_name = resolver.creator_credit(mention)
+            m_sponsor = resolver.is_sponsor(mention)
+            if m_sponsor:
+                sponsor_ids.update(ids)
             if m_roles:
                 if m_name:
                     crew.append((m_roles, m_name))
                 crew_ids.update(ids)
-            else:
+            elif not m_sponsor:
                 for pid in ids:
                     if pid not in mention_performer_ids:
                         mention_performer_ids.append(pid)
@@ -517,25 +559,35 @@ def collect_crew(processor, resolver, text, creator_roles, creator_name, creator
             director_names.append(name)
         if "photographer" in roles and name not in photographer_names:
             photographer_names.append(name)
-    return director_names, photographer_names, crew_ids, mention_performer_ids
+    return (director_names, photographer_names, crew_ids, mention_performer_ids,
+            sponsor_ids)
 
 
 def build_crew_only_update(db, processor, media_row, creator_ids, creator_roles,
                            creator_name, resolver, kind, existing_performer_ids,
-                           existing_credit):
-    """Return an update that only fixes the crew credit: move director/
-    photographer-tagged people out of the existing performers list and into the
-    director/photographer field. Leaves title, details, date, studio, tags and
-    organized untouched. Returns (None, None) when nothing needs to change.
+                           existing_credit, tags=None, existing_tag_ids=None,
+                           creator_sponsor=False):
+    """Return an update that only fixes the crew and sponsor credits: move
+    director/photographer-tagged people out of the existing performers list and
+    into the director/photographer field, and drop Sponsor-tagged accounts from
+    it in favour of a ``sponsored`` tag.
+
+    Still surgical: it touches only ``performer_ids``, the ``director`` /
+    ``photographer`` field, and -- purely additively -- ``tag_ids``. Title,
+    details, date, studio and organized are left untouched, so manual edits
+    survive. Returns (None, None) when nothing needs to change.
     """
     meta = db.post_meta(media_row["post_id"])
     text = meta["text"] if (meta and meta["text"]) else ""
-    director_names, photographer_names, crew_ids, _ = collect_crew(
-        processor, resolver, text, creator_roles, creator_name, creator_ids
+    director_names, photographer_names, crew_ids, _, sponsor_ids = collect_crew(
+        processor, resolver, text, creator_roles, creator_name, creator_ids,
+        creator_sponsor,
     )
 
-    # Prune credited crew from the existing performers; never leave it empty.
-    new_perf = [pid for pid in existing_performer_ids if pid not in crew_ids]
+    # Prune credited crew and sponsors from the existing performers; never leave
+    # it empty (the creator goes back in rather than stripping the media bare).
+    drop = crew_ids | sponsor_ids
+    new_perf = [pid for pid in existing_performer_ids if pid not in drop]
     if not new_perf:
         new_perf = list(creator_ids)
 
@@ -545,9 +597,19 @@ def build_crew_only_update(db, processor, media_row, creator_ids, creator_roles,
     elif kind == "image" and photographer_names:
         credit = ", ".join(photographer_names)
 
+    # Sponsors have no Stash field to be credited in, so the tag is the record.
+    # Added only, never removed: un-sponsoring is a manual call.
+    existing_tag_ids = list(existing_tag_ids or [])
+    merged_tags = list(existing_tag_ids)
+    if sponsor_ids and tags is not None:
+        sponsor_tag_id = tags.resolve(SPONSORED_TAG)
+        if sponsor_tag_id and sponsor_tag_id not in merged_tags:
+            merged_tags.append(sponsor_tag_id)
+
     perf_changed = new_perf != list(existing_performer_ids)
     credit_changed = credit is not None and credit != (existing_credit or "")
-    if not perf_changed and not credit_changed:
+    tags_changed = merged_tags != existing_tag_ids
+    if not perf_changed and not credit_changed and not tags_changed:
         return None, None
 
     update = {}
@@ -559,6 +621,9 @@ def build_crew_only_update(db, processor, media_row, creator_ids, creator_roles,
         field = "director" if kind == "scene" else "photographer"
         update[field] = credit
         parts.append("{}={}".format(field, credit))
+    if tags_changed:
+        update["tag_ids"] = merged_tags
+        parts.append("+{}".format(SPONSORED_TAG))
     return update, ", ".join(parts)
 
 
@@ -566,7 +631,7 @@ def build_update(db, processor, profile, media_row, creator_ids, studio_id,
                  resolver, tags, tag_matcher, kind, creator_roles, creator_name,
                  source,
                  existing_performer_ids=None, existing_tag_ids=None,
-                 keep_manual_edits=False):
+                 keep_manual_edits=False, creator_sponsor=False):
     username = profile["username"]
     post_id = media_row["post_id"]
     filename = media_row["filename"]
@@ -575,8 +640,10 @@ def build_update(db, processor, profile, media_row, creator_ids, studio_id,
     meta = db.post_meta(post_id)
     text = meta["text"] if (meta and meta["text"]) else ""
 
-    director_names, photographer_names, crew_ids, mention_performer_ids = collect_crew(
-        processor, resolver, text, creator_roles, creator_name, creator_ids
+    (director_names, photographer_names, crew_ids, mention_performer_ids,
+     sponsor_ids) = collect_crew(
+        processor, resolver, text, creator_roles, creator_name, creator_ids,
+        creator_sponsor,
     )
 
     if text:
@@ -586,26 +653,33 @@ def build_update(db, processor, profile, media_row, creator_ids, studio_id,
         title = "{}: {}".format(api_type, date) if api_type else date
         details = ""
 
-    # Build the performer list: the creator (unless they are crew) plus any
-    # @mentioned performers who aren't crew. If everyone credited turned out to
-    # be crew, fall back to the creator so the media is never performer-less.
-    performer_ids = [] if creator_roles else list(creator_ids)
+    # Build the performer list: the creator (unless they are crew or a sponsor)
+    # plus any credited accounts that are neither. If everyone credited turned
+    # out to be crew or a sponsor, fall back to the creator so the media is
+    # never performer-less.
+    performer_ids = [] if (creator_roles or creator_sponsor) else list(creator_ids)
     for pid in mention_performer_ids:
         if pid not in performer_ids:
             performer_ids.append(pid)
     # Non-destructive mode: keep any performers already on the media (e.g. ones
-    # you added by hand) instead of replacing the list. Crew-tagged people are
-    # still pulled out (crew_ids), so the crew feature keeps working.
+    # you added by hand) instead of replacing the list. Crew- and Sponsor-tagged
+    # accounts are still pulled out, so both features keep working.
     if keep_manual_edits and existing_performer_ids:
+        drop = crew_ids | sponsor_ids
         for pid in existing_performer_ids:
             if pid not in performer_ids:
                 performer_ids.append(pid)
-        performer_ids = [pid for pid in performer_ids if pid not in crew_ids]
+        performer_ids = [pid for pid in performer_ids if pid not in drop]
     if not performer_ids:
         performer_ids = list(creator_ids)
 
     tag_ids = collect_tag_ids(processor, meta, text, tags, tag_matcher, source, db,
                               post_id)
+    # A sponsor has no Stash field to be credited in, so the tag carries it.
+    if sponsor_ids:
+        sponsor_tag_id = tags.resolve(SPONSORED_TAG)
+        if sponsor_tag_id and sponsor_tag_id not in tag_ids:
+            tag_ids.append(sponsor_tag_id)
     # Non-destructive mode: keep any tags already on the media (manual tags)
     # instead of replacing the list; the post's tags are added alongside.
     if keep_manual_edits and existing_tag_ids:
@@ -641,7 +715,7 @@ def build_update(db, processor, profile, media_row, creator_ids, studio_id,
 
 def _gallery_meta(db, processor, profile, post_id, group, performers, tags,
                   tag_matcher, studio_id, creator_ids, creator_roles, creator_name,
-                  url, scene_ids, source):
+                  url, scene_ids, source, creator_sponsor=False):
     """Build a gallery input for one post, from the same post text/date/studio/
     performers/tags used for its scenes and images. Crew are credited in the
     gallery photographer field (galleries have no director)."""
@@ -664,17 +738,36 @@ def _gallery_meta(db, processor, profile, post_id, group, performers, tags,
     # move crew out of the performers list into the director/photographer field --
     # see build_update / build_crew_only_update.) So a gallery's performers are
     # everyone credited: the creator plus every @mentioned account, crew or not.
-    performer_ids = list(creator_ids)
+    #
+    # SPONSORS are the exception to that exception: they are dropped here too.
+    # The reason crew stay is that their credit field loses the link -- but a
+    # sponsor has no credit field at all, the 'sponsored' tag below is the whole
+    # record, so keeping them would just leave a brand sitting in the cast list.
+    sponsor_ids = set(creator_ids) if creator_sponsor else set()
+    performer_ids = [] if creator_sponsor else list(creator_ids)
     if text:
         for mention, domain in processor.parse_mentions(text):
-            for pid in performers.resolve(
+            # resolve() first: is_sponsor() reads the info cache that resolve()
+            # fills, so asking before resolving would always say "not a sponsor".
+            ids = performers.resolve(
                 mention, from_mention=True,
                 source=sources.profile_for_domain(domain),
-            ):
+            )
+            if performers.is_sponsor(mention):
+                sponsor_ids.update(ids)
+                continue
+            for pid in ids:
                 if pid not in performer_ids:
                     performer_ids.append(pid)
     if not performer_ids:
         performer_ids = list(creator_ids)
+
+    gallery_tag_ids = collect_tag_ids(processor, meta, text, tags, tag_matcher,
+                                      source, db, post_id)
+    if sponsor_ids:
+        sponsor_tag_id = tags.resolve(SPONSORED_TAG)
+        if sponsor_tag_id and sponsor_tag_id not in gallery_tag_ids:
+            gallery_tag_ids.append(sponsor_tag_id)
 
     gallery_input = {
         "title": title,
@@ -686,8 +779,7 @@ def _gallery_meta(db, processor, profile, post_id, group, performers, tags,
         "details": details,
         "studio_id": studio_id,
         "performer_ids": performer_ids,
-        "tag_ids": collect_tag_ids(processor, meta, text, tags, tag_matcher, source,
-                                   db, post_id),
+        "tag_ids": gallery_tag_ids,
         "urls": [url],
         "organized": True,
         # Crew are linked performers on galleries, so the free-text photographer
@@ -699,13 +791,16 @@ def _gallery_meta(db, processor, profile, post_id, group, performers, tags,
         gallery_input["date"] = date
     if scene_ids:
         gallery_input["scene_ids"] = scene_ids
-    return gallery_input, title
+    # sponsor_ids goes back so the non-destructive merge can prune a sponsor
+    # that an earlier sync (or a hand edit) left on the gallery.
+    return gallery_input, title, sponsor_ids
 
 
 def build_post_galleries(client, db, profile, processor, performers, tags,
                          tag_matcher, studio_id, creator_ids, creator_roles,
                          creator_name, full_sync, keep_manual_edits, workers,
-                         all_scenes, all_images, totals, source):
+                         all_scenes, all_images, totals, source,
+                         creator_sponsor=False):
     """Group a creator's media by post and make one gallery per post.
 
     A gallery is created when a post has 2+ images, or an image alongside a video
@@ -773,18 +868,22 @@ def build_post_galleries(client, db, profile, processor, performers, tags,
         if existing:
             gallery_input = None
             if full_sync:
-                gallery_input, _title = _gallery_meta(
+                gallery_input, _title, sponsor_ids = _gallery_meta(
                     db, processor, profile, post_id, group, performers, tags,
                     tag_matcher, studio_id, creator_ids, creator_roles,
-                    creator_name, url, scenes, source,
+                    creator_name, url, scenes, source, creator_sponsor,
                 )
                 # Non-destructive mode: keep performers and tags already there.
+                # Sponsors are the exception -- they are pruned even here, or a
+                # brand left on the gallery by an older sync would never leave.
                 if keep_manual_edits:
                     merged = list(gallery_input["performer_ids"])
                     for p in existing.get("performers") or []:
                         if p["id"] not in merged:
                             merged.append(p["id"])
-                    gallery_input["performer_ids"] = merged
+                    gallery_input["performer_ids"] = [
+                        pid for pid in merged if pid not in sponsor_ids
+                    ] or list(creator_ids)
                     merged_tags = list(gallery_input.get("tag_ids") or [])
                     for t in existing.get("tags") or []:
                         if t["id"] not in merged_tags:
@@ -799,10 +898,10 @@ def build_post_galleries(client, db, profile, processor, performers, tags,
                 return {"galleries": 1}
             tasks.append(_update_task)
         else:
-            gallery_input, title = _gallery_meta(
+            gallery_input, title, _sponsor_ids = _gallery_meta(
                 db, processor, profile, post_id, group, performers, tags,
                 tag_matcher, studio_id, creator_ids, creator_roles,
-                creator_name, url, scenes, source,
+                creator_name, url, scenes, source, creator_sponsor,
             )
 
             def _create_task(gi=gallery_input, imgs=list(images), t=title,
@@ -995,6 +1094,7 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
     studio_id = None
     performer_ids = []
     creator_roles, creator_name = set(), None
+    creator_sponsor = False
     # The tag-only pass needs neither the creator performer nor the studio. The
     # crew pass needs the creator performer (for role/name and the fallback) but
     # not the studio; the sync passes need both.
@@ -1016,6 +1116,9 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
         creator_roles, creator_name = performers.creator_credit(username)
         if creator_roles:
             log.LogInfo("  '{}' tagged as crew".format(username))
+        creator_sponsor = performers.is_sponsor(username)
+        if creator_sponsor:
+            log.LogInfo("  '{}' tagged as sponsor".format(username))
 
         if not crew_only:
             studio_id = studios.resolve(username, source)
@@ -1102,6 +1205,7 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
             update, label = build_crew_only_update(
                 db, processor, media_row, performer_ids, creator_roles,
                 creator_name, performers, kind, existing_perf, existing_credit,
+                tags, existing_tags, creator_sponsor,
             )
             if update is None:
                 totals["skipped"] += 1
@@ -1111,6 +1215,7 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
                 db, processor, profile, media_row, performer_ids, studio_id,
                 performers, tags, tag_matcher, kind, creator_roles, creator_name,
                 source, existing_perf, existing_tags, keep_manual_edits,
+                creator_sponsor,
             )
         update["id"] = stash_id
         media_tasks.append(_media_task(client, kind, update))
@@ -1127,6 +1232,7 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
             client, db, profile, processor, performers, tags, tag_matcher,
             studio_id, performer_ids, creator_roles, creator_name, full_sync,
             keep_manual_edits, workers, all_scenes, all_images, totals, source,
+            creator_sponsor,
         )
         # Stash's own folder galleries (one per scanned image folder) arrive with
         # no performer, studio or real title -- adopt them too.
@@ -1198,6 +1304,7 @@ def main():
     auto_tag_from_text = bool(get_setting(config, "autoTagFromText", False))
     skip_multi_file = bool(get_setting(config, "skipMultiFile", False))
     crew_tag_id = get_setting(config, "crewTagId", "")
+    sponsor_tag_id = get_setting(config, "sponsorTagId", "")
     keep_manual_edits = bool(get_setting(config, "keepManualEdits", False))
     title_exclusions = parse_title_exclusions(get_setting(config, "titleExclusions", ""))
     try:
@@ -1246,7 +1353,7 @@ def main():
         )
 
     pass_name = ("tag-only pass" if tag_only else
-                 "crew-credit pass" if crew_only else
+                 "crew/sponsor credit pass" if crew_only else
                  "scoped performer re-sync" if performer_scope else
                  "{}metadata sync".format("FULL " if full_sync else ""))
     log.LogInfo("Starting {} for: {}".format(
@@ -1290,10 +1397,12 @@ def main():
     if title_exclusions:
         log.LogInfo("Loaded {} title exclusion pattern(s).".format(len(title_exclusions)))
     studios = StudioResolver(client)
-    # The crew pass is surgical maintenance: it must never create performers as
+    # The crew/sponsor pass is surgical maintenance: it must never create performers as
     # a side effect of resolving @mentions, even if Create Missing Performers is
     # enabled for the sync tasks.
-    performers = PerformerResolver(client, auto_create and not crew_only, crew_tag_id)
+    performers = PerformerResolver(
+        client, auto_create and not crew_only, crew_tag_id, sponsor_tag_id
+    )
     tags = TagResolver(client)
     # The tag-only task always matches tags from text; the regular sync only
     # does so when the setting is enabled.
@@ -1339,7 +1448,7 @@ def main():
             db.close()
 
     log.LogProgress(1.0)
-    verb = "Tagging" if tag_only else ("Crew update" if crew_only else "Sync")
+    verb = "Tagging" if tag_only else ("Credits update" if crew_only else "Sync")
     summary = "{} complete. Scenes updated: {}, Images updated: {}, Skipped: {}".format(
         verb, totals["scenes"], totals["images"], totals["skipped"]
     )

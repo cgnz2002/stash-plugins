@@ -161,9 +161,10 @@ run, so there is no per-site task:
   the per-post galleries' metadata.
 - `mode: tag` — additive only; adds tags from post text, never touches other
   fields. Safe over manually edited media.
-- `mode: crew` — surgical crew-credit pass. For all synced media it moves
-  crew-tagged people out of the performers list and into the scene `director` /
-  image `photographer` field, leaving every other field untouched. Skips media
+- `mode: crew` — surgical credits pass ("Update Crew & Sponsors"). For all synced
+  media it moves crew-tagged people out of the performers list and into the scene
+  `director` / image `photographer` field, and drops sponsor-tagged accounts in
+  favour of the `sponsored` tag. Every other field is left untouched. Skips media
   that already match, and never creates performers (even with auto-create on).
 - `mode: performer` — a full re-sync scoped to one Stash performer. Requires a
   `performerId` arg (does nothing without it, so it never falls back to syncing
@@ -284,6 +285,24 @@ run, so there is no per-site task:
   post's gallery and leaves the gallery photographer empty, because Stash's
   director/photographer fields don't link back to a performer — so a crew
   member's work is only browsable via the gallery's performer link.
+- **Sponsors** — the same shape as crew, driven by a second tag id
+  (`sponsorTagId`), but with nowhere to credit them: a Sponsor-tagged account is
+  **removed from `performer_ids`** and the media gets the `SPONSORED_TAG`
+  (`sponsored`, resolved through `TagResolver` so an existing tag carrying it as
+  a *name or alias* is reused). `collect_crew` returns `sponsor_ids` alongside
+  `crew_ids` and keeps sponsors out of `mention_performer_ids`; `build_update`
+  and `build_crew_only_update` prune them and add the tag. **Galleries drop
+  sponsors too** — the exception to the crew exception above, because the reason
+  crew stay (their credit field loses the performer link) doesn't apply when
+  there is no credit field at all. `_gallery_meta` therefore returns
+  `sponsor_ids` as a third value so the `keepManualEdits` merge can prune a
+  sponsor an older sync left behind; `keepManualEdits` deliberately does **not**
+  protect sponsors, or a brand added before the feature existed could never be
+  cleaned out. A performer tagged both crew and sponsor gets both treatments,
+  which is why `PerformerResolver.resolve` inspects every match instead of
+  stopping at the first crew hit. The tag is only ever **added**, never removed.
+  Note `is_sponsor()` reads the cache `resolve()` fills, so it must be called
+  *after* `resolve()` for that username.
 
 ## Hard constraints — keep these intact
 
@@ -297,11 +316,12 @@ run, so there is no per-site task:
   new field/query against the running Stash version before relying on it.
   Note the asymmetry: `director` exists only on scenes, `photographer` only on
   images — credit each on the media type that has it.
-- **The tag-only and crew paths are surgical.** `build_tag_only_update` only ever
-  adds tags; `build_crew_only_update` only ever touches `performer_ids` and the
-  `director`/`photographer` field, and returns `(None, None)` when nothing
-  changes. Both leave all other fields untouched (Stash only mutates fields you
-  send), so manual edits survive. Keep them that way.
+- **The tag-only and crew/sponsor paths are surgical.** `build_tag_only_update`
+  only ever adds tags; `build_crew_only_update` only ever touches
+  `performer_ids`, the `director`/`photographer` field, and `tag_ids` — the last
+  one **additively and only to add `sponsored`** — and returns `(None, None)`
+  when nothing changes. Both leave all other fields untouched (Stash only
+  mutates fields you send), so manual edits survive. Keep them that way.
 - Updates set `organized: True` so the normal `sync` pass skips them next time —
   don't drop this from the regular sync update. (The `tag` and `crew` passes do
   not set it, so they don't disturb the sync/organized workflow.)

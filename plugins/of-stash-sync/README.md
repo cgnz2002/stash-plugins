@@ -57,11 +57,13 @@ creator profile in it:
   one. A bare `@mention` names no site, so it uses the site being synced.
 - Credits anyone tagged as **crew** (see *Crew Tag Name*) in the scene
   **Director** / image **Photographer** field instead of the performers list.
+- Drops anyone tagged as a **sponsor** (see *Sponsor Tag ID*) from the performers
+  list and tags the media `sponsored` instead.
 - Groups each post's media into a **gallery** (see below).
 - Tags every synced scene, image and gallery with that site's tag (`OnlyFans` /
   `JustFor.Fans`, created if missing), so each site's media is filterable by one
   tag.
-- Optionally tags media `paid` / `archived`.
+- Optionally tags media `paid` / `archived` / `sponsored`.
 - Marks each synced item **organized** so the normal sync skips it next time.
 
 ### Post galleries
@@ -144,6 +146,7 @@ Both current and older OF-Scraper database layouts are supported.
 | Skip Multi-file Scenes and Images | off | Sync and Full Sync skip any scene or image with more than one file (e.g. merged scenes), to protect their performers and metadata. Does not affect the Tag task. |
 | Title Exclusions | (empty) | Phrases/regexes stripped from generated **titles** only (the description keeps the original post text). Best edited via **Settings → Tools → "Fan Site Sync: Title Exclusions"** (a list editor like Stash's scan Exclusions). See below. |
 | Crew Tag ID | (empty) | The Stash tag **ID** (from the tag's URL, e.g. `.../tags/42` → `42`) marking crew performers. A performer with this tag has their name put in each scene's Director field and each image's Photographer field instead of the performers list. Applies to the creator and any collaborator credited by `@mention` or profile URL (`onlyfans.com/username`). Empty disables crew handling. |
+| Sponsor Tag ID | (empty) | The Stash tag **ID** marking **sponsor** performers (brands/advertisers). A performer with this tag is **removed** from the performers list and the scene/image/gallery is tagged `sponsored` instead — Stash has no field to credit a sponsor in. Unlike crew, sponsors are dropped from galleries too. Applies to the creator and any collaborator credited by `@mention` or profile URL. Empty disables sponsor handling. See below. |
 
 ## Tasks
 
@@ -167,12 +170,14 @@ Stash first so the scenes and images exist.
   the performer back to its OF username via the performer's name *and aliases*, so
   as long as the OF username is set as the performer's name or an alias (as usual),
   the button finds the right creator.
-- **Update Crew** - re-apply only the crew logic to ALL OnlyFans scenes and
-  images: move crew-tagged people (see *Crew Tag Name*) into the Director /
-  Photographer field and out of the performers list. It leaves titles, dates,
-  studios, tags and everything else untouched, skips media that already match,
-  and never creates performers. Use it after tagging newly generated performers
-  as crew, instead of a full re-sync.
+- **Update Crew & Sponsors** - re-apply only the crew and sponsor logic to ALL
+  synced scenes and images: move crew-tagged people (see *Crew Tag ID*) into the
+  Director / Photographer field and out of the performers list, and drop
+  sponsor-tagged accounts (see *Sponsor Tag ID*) from it in favour of a
+  `sponsored` tag. It leaves titles, dates, studios and everything else
+  untouched (the only tag it ever changes is adding `sponsored`), skips media
+  that already match, and never creates performers. Use it after tagging newly
+  generated performers as crew or sponsors, instead of a full re-sync.
 
 The settings toggles above appear alongside these task buttons and apply to the
 sync tasks.
@@ -199,6 +204,40 @@ browsing their work is hard; a gallery groups a whole post, so it carries the
 crew credit as a real performer link (their crew tag still distinguishes them).
 The gallery's Photographer field is left empty. So: scenes and images move crew
 into Director/Photographer, while the post's gallery keeps them clickable.
+
+### Sponsors (brands and advertisers)
+
+Creators often `@mention` or link a **brand** that sponsored a post. Stash has no
+field to credit a sponsor in, and they aren't in the media, so leaving them in
+the cast list is just wrong. Set up sponsors the same way as crew: make a tag,
+note its ID from the tag page URL, set it as the **Sponsor Tag ID**, and apply
+that tag to the brand's performer.
+
+From then on, on any sync or the **Update Crew & Sponsors** task, a credited
+sponsor is **removed from the performers list** and the media is tagged
+**`sponsored`** instead. Like crew, this covers both the creator whose database
+is being read and anyone they credit, by `@mention` or profile URL, and matching
+is by tag ID so you can rename the tag freely.
+
+Details worth knowing:
+
+- **Galleries drop sponsors too** — this is the one place sponsors differ from
+  crew. Crew stay linked on a gallery because their credit field loses the link;
+  a sponsor has no credit field at all, so the `sponsored` tag is the whole
+  record and keeping the brand in the cast would serve no purpose.
+- **The `sponsored` tag is only ever added, never removed.** Un-sponsoring
+  something is a manual call.
+- It's **created if missing**, and an existing tag carrying `sponsored` as its
+  name *or an alias* is reused rather than duplicated.
+- If a post's only credits are sponsors, the creator is kept as a performer so
+  the media is never left performer-less.
+- A performer tagged **both** crew and sponsor gets both treatments: the
+  Director/Photographer credit *and* the `sponsored` tag.
+- **Keep Manual Performers & Tags** doesn't protect a sponsor: they're pruned
+  even in non-destructive mode, otherwise a brand added by an older sync could
+  never be cleaned out.
+- Leave *Sponsor Tag ID* empty and nothing changes — sponsor handling is off and
+  those accounts stay ordinary performers.
 
 ### Title exclusions (cleaning up boilerplate titles)
 
