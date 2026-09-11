@@ -14,17 +14,18 @@ from concurrent.futures import ThreadPoolExecutor
 
 import log
 from stash import StashClient
-from of_database import OFDatabase
+from source_database import SourceDatabase
+import sources
 from media import MediaProcessor, compile_name_pattern
 
 # Plugin id == the manifest filename without extension.
 PLUGIN_ID = "of-stash-sync"
 
-DEFAULT_PARENT_STUDIO = "OnlyFans (network)"
 DEFAULT_MAX_TITLE_LENGTH = 65
-# Tag added to every synced scene, image and gallery so all OnlyFans media is
-# filterable by one tag. Created on first use if missing.
-DEFAULT_SITE_TAG = "OnlyFans"
+# The site tag, per-creator studio naming, post-URL rule, paid rule and data-path
+# setting all live on a SourceProfile (sources.py), picked per database from its
+# schema_flags source value -- that is what lets one sync serve several sites.
+
 # Stash is SQLite-backed and SQLite has a single writer, so parallel writes
 # don't actually commit concurrently -- they serialise on the DB write lock.
 # A little concurrency hides per-request latency, but too much just piles up
@@ -98,10 +99,6 @@ def get_setting(config, key, default):
     return value
 
 
-def of_url(username):
-    return "https://www.onlyfans.com/{}".format(username)
-
-
 def parse_title_exclusions(raw):
     """Parse the Title Exclusions setting into a list of pattern strings.
 
@@ -140,6 +137,10 @@ class PerformerResolver:
         # Stash doesn't silently disable crew handling. Empty disables it.
         self.crew_tag_id = str(crew_tag_id or "").strip()
         self.cache = {}
+        # The site currently being processed; only used for the URL put on a
+        # performer this resolver creates. Set per database by process_profile,
+        # since databases are processed one at a time.
+        self.source = sources.ONLYFANS
         # username -> {"roles": set(), "name": str} for the crew-credit logic
         self.info_cache = {}
         # lowercase name/alias -> [performers]; built once from a single bulk
@@ -187,7 +188,14 @@ class PerformerResolver:
             return set(), None
         return info["roles"], info["name"]
 
-    def resolve(self, username, from_mention=False):
+    def resolve(self, username, from_mention=False, source=None):
+        """Performer ids for a username, creating one if allowed.
+
+        ``source`` is the site the *credit* came from, used only for the URL of
+        a performer this call creates. Pass it when the credit was a profile
+        link, since a post can link a collaborator on a different site than the
+        post's own; it defaults to the site being synced.
+        """
         key = username.lower()
         if key in self.cache:
             return self.cache[key]
@@ -234,23 +242,35 @@ class PerformerResolver:
                     "correct performer.".format(username, names)
                 )
             else:
-                new_id = self.client.create_performer(username, of_url(username))
+                # The URL follows the site the credit came from, not the site
+                # being synced: a post can credit a collaborator with a link to
+                # another site, and pointing that performer at the wrong one
+                # would give them a profile URL that doesn't exist.
+                site = source or self.source
+                new_id = self.client.create_performer(
+                    username, site.profile_url(username)
+                )
                 if new_id:
                     ids = [new_id]
                     self._register({"id": new_id, "name": username, "alias_list": [], "tags": []})
-                    source = " (from @mention)" if from_mention else ""
-                    log.LogInfo("Created performer '{}'{}".format(username, source))
+                    origin = " (from @mention)" if from_mention else ""
+                    log.LogInfo(
+                        "Created performer '{}' [{}]{}".format(
+                            username, site.label, origin
+                        )
+                    )
         self.cache[key] = ids
         return ids
 
 
 class StudioResolver:
-    def __init__(self, client, parent_id, icon_data_url):
+    def __init__(self, client):
         self.client = client
-        self.parent_id = parent_id
-        self.icon = icon_data_url
+        # Keyed by (site, creator): the parent studio, name suffix and icon all
+        # come from the source profile, so one resolver serves every site.
         self.cache = {}
-        self._map = None  # lowercase studio name -> id, built once
+        self._map = None  # lowercase studio name/alias -> id, built once
+        self._no_image = set()  # studio ids Stash reports as having no image
 
     def _ensure_map(self):
         if self._map is not None:
@@ -267,25 +287,44 @@ class StudioResolver:
                 key = (candidate or "").strip().lower()
                 if key and key not in self._map:
                     self._map[key] = studio["id"]
+            # Stash appends "&default=true" to image_path when a studio has no
+            # image of its own, so this set is exactly the studios whose logo can
+            # be filled in without overwriting one somebody chose.
+            if "default=true" in (studio.get("image_path") or ""):
+                self._no_image.add(studio["id"])
 
-    def resolve(self, username):
-        if username in self.cache:
-            return self.cache[username]
+    def resolve(self, username, source):
+        # Cached per (site, creator): the same username can exist on two sites,
+        # and each gets its own studio.
+        cache_key = (source.key, username)
+        if cache_key in self.cache:
+            return self.cache[cache_key]
         self._ensure_map()
-        name = "{} (OnlyFans)".format(username)
+        name = source.studio_name(username)
         studio_id = self._map.get(name.strip().lower())
         if not studio_id:
             studio_id = self.client.create_studio(
                 name,
-                self.parent_id,
-                of_url(username),
-                "Sub Studio for OnlyFans content creator",
-                self.icon,
+                source.parent_id,
+                source.profile_url(username),
+                "Sub Studio for {} content creator".format(source.label),
+                source.icon,
             )
             if studio_id:
                 self._map[name.strip().lower()] = studio_id
             log.LogInfo("Created studio '{}'".format(name))
-        self.cache[username] = studio_id
+        elif source.icon and studio_id in self._no_image:
+            # Back-fill the logo onto a studio created before the plugin shipped
+            # an icon for this site: Stash only accepts a studio image on create,
+            # so it would otherwise stay blank forever. Guarded by _no_image, so a
+            # studio with any image of its own is never overwritten.
+            self._no_image.discard(studio_id)
+            try:
+                self.client.update_studio({"id": studio_id, "image": source.icon})
+                log.LogInfo("Added logo to existing studio '{}'".format(name))
+            except RuntimeError as e:
+                log.LogWarning("Could not set logo on studio '{}': {}".format(name, e))
+        self.cache[cache_key] = studio_id
         return studio_id
 
 
@@ -360,11 +399,11 @@ class TagTextMatcher:
         return found
 
 
-def load_icon(server_connection):
+def load_icon(server_connection, filename):
     plugin_dir = server_connection.get("PluginDir")
     if not plugin_dir:
         plugin_dir = os.path.dirname(os.path.abspath(__file__))
-    icon_path = os.path.join(plugin_dir, "onlyfans.png")
+    icon_path = os.path.join(plugin_dir, filename)
     if os.path.isfile(icon_path):
         with open(icon_path, "rb") as f:
             encoded = base64.b64encode(f.read()).decode("utf-8")
@@ -372,25 +411,41 @@ def load_icon(server_connection):
     return None
 
 
-def collect_tag_ids(processor, meta, text, tags, tag_matcher, site_tag=DEFAULT_SITE_TAG):
-    """Tag ids implied by a post: the site tag (always), plus paid/archived and
-    text matches. Applied to every synced scene, image and gallery; the surgical
-    crew pass never calls this, so it stays tag-free."""
+def collect_tag_ids(processor, meta, text, tags, tag_matcher, source, db, post_id):
+    """Tag ids implied by a post: the site tag (always), plus paid/archived, any
+    hashtags the post carries, and text matches. Applied to every synced scene,
+    image and gallery; the surgical crew pass never calls this, so it stays
+    tag-free.
+
+    What counts as "paid" is site-specific (see SourceProfile.is_paid): OnlyFans
+    has a real per-post price, JustFor.Fans has only a Free/Paid tier.
+
+    Hashtags come from the source database when it records them (jff-scraper
+    does; OF-Scraper doesn't, and hashtags() is simply empty there). Unlike the
+    fuzzy text matches -- which only ever attach tags that already exist -- these
+    are deliberate creator metadata, so they are created when missing.
+    """
     tag_ids = []
-    if site_tag:
-        tag_id = tags.resolve(site_tag)
+    if source.site_tag:
+        tag_id = tags.resolve(source.site_tag)
         if tag_id:
             tag_ids.append(tag_id)
-    if meta:
-        price = meta["price"] or 0
-        if meta["paid"] and price and int(price) > 0:
-            tag_id = tags.resolve("paid")
-            if tag_id:
-                tag_ids.append(tag_id)
-        if meta["archived"]:
-            tag_id = tags.resolve("archived")
-            if tag_id:
-                tag_ids.append(tag_id)
+    if source.is_paid(db, post_id, meta):
+        tag_id = tags.resolve("paid")
+        if tag_id:
+            tag_ids.append(tag_id)
+    if meta and meta["archived"]:
+        tag_id = tags.resolve("archived")
+        if tag_id:
+            tag_ids.append(tag_id)
+    if db.is_pinned(post_id):
+        tag_id = tags.resolve("pinned")
+        if tag_id and tag_id not in tag_ids:
+            tag_ids.append(tag_id)
+    for hashtag in db.hashtags(post_id):
+        tag_id = tags.resolve(hashtag)
+        if tag_id and tag_id not in tag_ids:
+            tag_ids.append(tag_id)
     if tag_matcher is not None and text:
         for tag_id in tag_matcher.match(processor.remove_html_tags(text)):
             if tag_id not in tag_ids:
@@ -398,7 +453,7 @@ def collect_tag_ids(processor, meta, text, tags, tag_matcher, site_tag=DEFAULT_S
     return tag_ids
 
 
-def build_tag_only_update(db, processor, media_row, tags, tag_matcher,
+def build_tag_only_update(db, processor, media_row, tags, tag_matcher, source,
                           existing_tag_ids):
     """Return an update that only adds tags, or None if nothing new to add.
 
@@ -407,7 +462,8 @@ def build_tag_only_update(db, processor, media_row, tags, tag_matcher,
     """
     meta = db.post_meta(media_row["post_id"])
     text = meta["text"] if (meta and meta["text"]) else ""
-    new_tags = collect_tag_ids(processor, meta, text, tags, tag_matcher)
+    new_tags = collect_tag_ids(processor, meta, text, tags, tag_matcher, source, db,
+                               media_row["post_id"])
 
     merged = list(existing_tag_ids)
     added = 0
@@ -437,8 +493,14 @@ def collect_crew(processor, resolver, text, creator_roles, creator_name, creator
 
     mention_performer_ids = []
     if text:
-        for mention in processor.parse_mentions(text):
-            ids = resolver.resolve(mention, from_mention=True)
+        for mention, domain in processor.parse_mentions(text):
+            # A credit given as a profile link names its own site, which may not
+            # be the site the post came from; a bare @mention names none, and
+            # resolve() then falls back to the site being synced.
+            ids = resolver.resolve(
+                mention, from_mention=True,
+                source=sources.profile_for_domain(domain),
+            )
             m_roles, m_name = resolver.creator_credit(mention)
             if m_roles:
                 if m_name:
@@ -502,6 +564,7 @@ def build_crew_only_update(db, processor, media_row, creator_ids, creator_roles,
 
 def build_update(db, processor, profile, media_row, creator_ids, studio_id,
                  resolver, tags, tag_matcher, kind, creator_roles, creator_name,
+                 source,
                  existing_performer_ids=None, existing_tag_ids=None,
                  keep_manual_edits=False):
     username = profile["username"]
@@ -541,7 +604,8 @@ def build_update(db, processor, profile, media_row, creator_ids, studio_id,
     if not performer_ids:
         performer_ids = list(creator_ids)
 
-    tag_ids = collect_tag_ids(processor, meta, text, tags, tag_matcher)
+    tag_ids = collect_tag_ids(processor, meta, text, tags, tag_matcher, source, db,
+                              post_id)
     # Non-destructive mode: keep any tags already on the media (manual tags)
     # instead of replacing the list; the post's tags are added alongside.
     if keep_manual_edits and existing_tag_ids:
@@ -551,7 +615,7 @@ def build_update(db, processor, profile, media_row, creator_ids, studio_id,
 
     update = {
         "title": title,
-        "code": processor.studio_code(filename),
+        "code": source.media_code(processor, media_row, post_id),
         "date": date,
         "studio_id": studio_id,
         "performer_ids": performer_ids,
@@ -565,18 +629,19 @@ def build_update(db, processor, profile, media_row, creator_ids, studio_id,
         update["director"] = ", ".join(director_names)
     elif kind == "image" and photographer_names:
         update["photographer"] = ", ".join(photographer_names)
-    # Real posts have a numeric OF post id; profile/avatar/header assets use a
-    # hash and would produce a junk URL, so only set the URL for numeric ids.
-    if str(post_id).isdigit():
-        update["urls"] = [
-            "https://www.onlyfans.com/{}/{}".format(post_id, username)
-        ]
+    # How a post URL is built is site-specific: OnlyFans rebuilds it from the
+    # post id, JustFor.Fans has to read the captured link (its URLs carry an
+    # encoded key). Either may decline to produce one -- OnlyFans skips
+    # profile/avatar assets, whose hash ids would give a junk URL.
+    post_url = source.post_url(db, post_id, username)
+    if post_url:
+        update["urls"] = [post_url]
     return update, title
 
 
 def _gallery_meta(db, processor, profile, post_id, group, performers, tags,
                   tag_matcher, studio_id, creator_ids, creator_roles, creator_name,
-                  url, scene_ids):
+                  url, scene_ids, source):
     """Build a gallery input for one post, from the same post text/date/studio/
     performers/tags used for its scenes and images. Crew are credited in the
     gallery photographer field (galleries have no director)."""
@@ -601,8 +666,11 @@ def _gallery_meta(db, processor, profile, post_id, group, performers, tags,
     # everyone credited: the creator plus every @mentioned account, crew or not.
     performer_ids = list(creator_ids)
     if text:
-        for mention in processor.parse_mentions(text):
-            for pid in performers.resolve(mention, from_mention=True):
+        for mention, domain in processor.parse_mentions(text):
+            for pid in performers.resolve(
+                mention, from_mention=True,
+                source=sources.profile_for_domain(domain),
+            ):
                 if pid not in performer_ids:
                     performer_ids.append(pid)
     if not performer_ids:
@@ -610,10 +678,16 @@ def _gallery_meta(db, processor, profile, post_id, group, performers, tags,
 
     gallery_input = {
         "title": title,
+        # The post id, stamped on the gallery so it can be correlated straight
+        # back to its post. An OnlyFans link embeds the id, but a JustFor.Fans
+        # one carries an encoded key instead, so it cannot be recovered from the
+        # URL -- the code is the reliable route for both.
+        "code": str(post_id),
         "details": details,
         "studio_id": studio_id,
         "performer_ids": performer_ids,
-        "tag_ids": collect_tag_ids(processor, meta, text, tags, tag_matcher),
+        "tag_ids": collect_tag_ids(processor, meta, text, tags, tag_matcher, source,
+                                   db, post_id),
         "urls": [url],
         "organized": True,
         # Crew are linked performers on galleries, so the free-text photographer
@@ -631,7 +705,7 @@ def _gallery_meta(db, processor, profile, post_id, group, performers, tags,
 def build_post_galleries(client, db, profile, processor, performers, tags,
                          tag_matcher, studio_id, creator_ids, creator_roles,
                          creator_name, full_sync, keep_manual_edits, workers,
-                         all_scenes, all_images, totals):
+                         all_scenes, all_images, totals, source):
     """Group a creator's media by post and make one gallery per post.
 
     A gallery is created when a post has 2+ images, or an image alongside a video
@@ -690,9 +764,11 @@ def build_post_galleries(client, db, profile, processor, performers, tags,
         # 2+ images, or an image alongside a video.
         if not (len(images) >= 2 or (images and scenes)):
             continue
-        if not post_id.isdigit():
+        url = source.post_url(db, post_id, username)
+        if not url:
+            # No usable link for this post (e.g. an OnlyFans profile/avatar asset
+            # whose hash id can't form a URL). Galleries are keyed by URL, so skip.
             continue
-        url = "https://www.onlyfans.com/{}/{}".format(post_id, username)
         existing = by_url.get(url)
         if existing:
             gallery_input = None
@@ -700,7 +776,7 @@ def build_post_galleries(client, db, profile, processor, performers, tags,
                 gallery_input, _title = _gallery_meta(
                     db, processor, profile, post_id, group, performers, tags,
                     tag_matcher, studio_id, creator_ids, creator_roles,
-                    creator_name, url, scenes,
+                    creator_name, url, scenes, source,
                 )
                 # Non-destructive mode: keep performers and tags already there.
                 if keep_manual_edits:
@@ -726,7 +802,7 @@ def build_post_galleries(client, db, profile, processor, performers, tags,
             gallery_input, title = _gallery_meta(
                 db, processor, profile, post_id, group, performers, tags,
                 tag_matcher, studio_id, creator_ids, creator_roles,
-                creator_name, url, scenes,
+                creator_name, url, scenes, source,
             )
 
             def _create_task(gi=gallery_input, imgs=list(images), t=title,
@@ -743,29 +819,38 @@ def build_post_galleries(client, db, profile, processor, performers, tags,
     run_writes(tasks, workers, totals)
 
 
-def tag_post_galleries(client, db, profile, processor, tags, tag_matcher, workers, totals):
+def tag_post_galleries(client, db, profile, processor, tags, tag_matcher, workers,
+                       totals, source):
     """Additive tag pass over the creator's per-post galleries: merge in the
     OnlyFans (plus paid/archived/text) tags, leaving every other gallery field
     untouched. Used by the tag task, which otherwise doesn't touch galleries.
     """
     username = profile["username"]
     # Find (never create) the creator studio, so the tag task stays surgical.
-    studio_id = client.find_studio("{} (OnlyFans)".format(username))
+    studio_id = client.find_studio(source.studio_name(username))
     if not studio_id:
         return
     tasks = []
+    # Correlate each gallery back to its post. Galleries carry the post id in
+    # `code`, which is the direct route; the url fallback covers galleries made
+    # before the code was stamped (an OnlyFans link embeds the post id, a
+    # JustFor.Fans one does not, so only the former can be parsed).
     for gal in client.find_galleries_for_studio(studio_id):
-        # Recover the post id from the gallery url (.../<post_id>/<username>).
         post_id = None
-        for u in gal.get("urls") or []:
-            if "onlyfans.com" in u:
-                parts = u.rstrip("/").split("/")
-                if len(parts) >= 2 and parts[-2].isdigit():
-                    post_id = parts[-2]
-                    break
+        code = str(gal.get("code") or "").strip()
+        if code.isdigit():
+            post_id = code
+        else:
+            for u in gal.get("urls") or []:
+                if "onlyfans.com" in u:
+                    parts = u.rstrip("/").split("/")
+                    if len(parts) >= 2 and parts[-2].isdigit():
+                        post_id = parts[-2]
+                        break
         meta = db.post_meta(post_id) if post_id else None
         text = meta["text"] if (meta and meta["text"]) else ""
-        new_tags = collect_tag_ids(processor, meta, text, tags, tag_matcher)
+        new_tags = collect_tag_ids(processor, meta, text, tags, tag_matcher, source,
+                                   db, post_id)
 
         existing = [t["id"] for t in gal.get("tags") or []]
         merged = list(existing)
@@ -784,7 +869,7 @@ def tag_post_galleries(client, db, profile, processor, tags, tag_matcher, worker
     run_writes(tasks, workers, totals)
 
 
-def folder_gallery_title(username, folder_path):
+def folder_gallery_title(username, folder_path, source):
     """A readable title for a scanned image folder, e.g.
     "jake_od OnlyFans Images (Posts/Free)".
 
@@ -795,7 +880,7 @@ def folder_gallery_title(username, folder_path):
     """
     parts = [p for p in str(folder_path or "").replace("\\", "/").split("/") if p]
     if not parts:
-        return "{} {} Images".format(username, DEFAULT_SITE_TAG)
+        return "{} {} Images".format(username, source.site_tag)
     kind = parts[-1]
     lowered = [p.lower() for p in parts]
     target = username.strip().lower()
@@ -805,14 +890,14 @@ def folder_gallery_title(username, folder_path):
         # up the path (e.g. a data root that happens to share the name).
         idx = len(lowered) - 1 - lowered[::-1].index(target)
         context = parts[idx + 1:-1]
-    title = "{} {} {}".format(username, DEFAULT_SITE_TAG, kind)
+    title = "{} {} {}".format(username, source.site_tag, kind)
     if context:
         title += " ({})".format("/".join(context))
     return title
 
 
 def build_folder_gallery_update(gal, username, folder_path, studio_id,
-                                creator_ids, site_tag_id):
+                                creator_ids, site_tag_id, source):
     """Update for one scanned folder gallery, or None when nothing would change.
 
     Deliberately ADDITIVE for performers and tags: a folder is not a post, so
@@ -821,7 +906,7 @@ def build_folder_gallery_update(gal, username, folder_path, studio_id,
     """
     update = {"id": gal["id"]}
 
-    title = folder_gallery_title(username, folder_path)
+    title = folder_gallery_title(username, folder_path, source)
     if (gal.get("title") or "") != title:
         update["title"] = title
 
@@ -848,7 +933,7 @@ def build_folder_gallery_update(gal, username, folder_path, studio_id,
 
 
 def sync_folder_galleries(client, profile, studio_id, creator_ids, tags,
-                          full_sync, workers, totals):
+                          full_sync, workers, totals, source):
     """Adopt the galleries Stash generates from scanned image folders.
 
     Stash makes one gallery per scanned folder of images; unlike the per-post
@@ -860,7 +945,7 @@ def sync_folder_galleries(client, profile, studio_id, creator_ids, tags,
     touches unorganized folder galleries, a full sync refreshes them all.
     """
     username = profile["username"]
-    site_tag_id = tags.resolve(DEFAULT_SITE_TAG) if tags else None
+    site_tag_id = tags.resolve(source.site_tag) if tags else None
     try:
         galleries = client.find_folder_galleries(username)
     except RuntimeError as e:
@@ -882,7 +967,7 @@ def sync_folder_galleries(client, profile, studio_id, creator_ids, tags,
         if not full_sync and gal.get("organized"):
             continue
         update = build_folder_gallery_update(
-            gal, username, folder_path, studio_id, creator_ids, site_tag_id
+            gal, username, folder_path, studio_id, creator_ids, site_tag_id, source
         )
         if update:
             tasks.append(_folder_gallery_task(client, update))
@@ -901,10 +986,11 @@ def _folder_gallery_task(client, update):
 
 def process_profile(client, db, profile, processor, studios, performers, tags,
                     tag_matcher, full_sync, tag_only, crew_only, multiple_ok,
-                    skip_multi_file, keep_manual_edits, workers, totals):
+                    skip_multi_file, keep_manual_edits, workers, totals, source):
     user_id = profile["user_id"]
     username = profile["username"]
-    log.LogInfo("Processing {} (user_id {})".format(username, user_id))
+    log.LogInfo("Processing {} {} (user_id {})".format(
+        source.label, username, user_id))
 
     studio_id = None
     performer_ids = []
@@ -932,7 +1018,7 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
             log.LogInfo("  '{}' tagged as crew".format(username))
 
         if not crew_only:
-            studio_id = studios.resolve(username)
+            studio_id = studios.resolve(username, source)
             if not studio_id:
                 log.LogError("Could not resolve studio for {}; skipping".format(username))
                 return
@@ -1007,7 +1093,7 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
 
         if tag_only:
             update, added = build_tag_only_update(
-                db, processor, media_row, tags, tag_matcher, existing_tags
+                db, processor, media_row, tags, tag_matcher, source, existing_tags
             )
             if update is None:
                 totals["skipped"] += 1
@@ -1024,7 +1110,7 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
             update, label = build_update(
                 db, processor, profile, media_row, performer_ids, studio_id,
                 performers, tags, tag_matcher, kind, creator_roles, creator_name,
-                existing_perf, existing_tags, keep_manual_edits,
+                source, existing_perf, existing_tags, keep_manual_edits,
             )
         update["id"] = stash_id
         media_tasks.append(_media_task(client, kind, update))
@@ -1035,18 +1121,18 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
     # leaves galleries alone.
     if tag_only:
         tag_post_galleries(client, db, profile, processor, tags, tag_matcher,
-                           workers, totals)
+                           workers, totals, source)
     elif not crew_only:
         build_post_galleries(
             client, db, profile, processor, performers, tags, tag_matcher,
             studio_id, performer_ids, creator_roles, creator_name, full_sync,
-            keep_manual_edits, workers, all_scenes, all_images, totals,
+            keep_manual_edits, workers, all_scenes, all_images, totals, source,
         )
         # Stash's own folder galleries (one per scanned image folder) arrive with
         # no performer, studio or real title -- adopt them too.
         sync_folder_galleries(
             client, profile, studio_id, performer_ids, tags, full_sync,
-            workers, totals,
+            workers, totals, source,
         )
 
 
@@ -1091,8 +1177,18 @@ def main():
         log.LogError(msg)
         return msg
 
-    data_path = get_setting(config, "dataPath", "")
-    parent_studio_name = get_setting(config, "parentStudioName", DEFAULT_PARENT_STUDIO)
+    # Each site has its own data path and parent studio; everything else is
+    # shared. A site with no path configured is simply not scanned, so an
+    # OnlyFans-only setup behaves exactly as it did before other sites existed.
+    configured_sources = []
+    for source in sources.ALL_PROFILES:
+        path = str(get_setting(config, source.path_setting, "") or "").strip()
+        if not path:
+            continue
+        source.parent_default_name = get_setting(
+            config, source.parent_setting, source.parent_default
+        )
+        configured_sources.append((source, path))
     try:
         max_title_length = int(get_setting(config, "maxTitleLength", DEFAULT_MAX_TITLE_LENGTH))
     except (TypeError, ValueError):
@@ -1110,8 +1206,13 @@ def main():
         workers = DEFAULT_WORKERS
     workers = max(1, min(workers, 16))  # clamp: 1 = sequential, cap concurrency
 
-    if not data_path:
-        msg = "No data path configured. Set 'OF-Scraper Data Path' in the plugin settings."
+    if not configured_sources:
+        msg = (
+            "No data path configured. Set at least one of {} in the plugin "
+            "settings.".format(
+                " / ".join("'{}'".format(s.path_setting) for s in sources.ALL_PROFILES)
+            )
+        )
         log.LogError(msg)
         return msg
 
@@ -1144,41 +1245,51 @@ def main():
                 ", ".join(sorted(scoped_usernames)) or "(none)")
         )
 
-    if tag_only:
-        log.LogInfo("Starting OnlyFans tag-only pass. Data path: {}".format(data_path))
-    elif crew_only:
-        log.LogInfo("Starting OnlyFans crew-credit pass. Data path: {}".format(data_path))
-    elif performer_scope:
-        log.LogInfo("Starting OnlyFans scoped performer re-sync. Data path: {}".format(data_path))
-    else:
-        log.LogInfo(
-            "Starting OnlyFans {}metadata sync. Data path: {}".format(
-                "FULL " if full_sync else "", data_path
-            )
-        )
+    pass_name = ("tag-only pass" if tag_only else
+                 "crew-credit pass" if crew_only else
+                 "scoped performer re-sync" if performer_scope else
+                 "{}metadata sync".format("FULL " if full_sync else ""))
+    log.LogInfo("Starting {} for: {}".format(
+        pass_name,
+        ", ".join("{} ({})".format(src.label, path) for src, path in configured_sources)))
 
-    parent_studio_id = None
+    # The parent studio is only needed by the passes that create studios, and it
+    # must already exist -- the plugin never creates it.
     if not tag_only and not crew_only:
-        parent_studio_id = client.find_studio(parent_studio_name)
-        if not parent_studio_id:
-            msg = (
-                "Parent studio '{}' not found in Stash. Create it (or fix the "
-                "Parent Studio Name setting) and retry.".format(parent_studio_name)
-            )
-            log.LogError(msg)
-            return msg
+        for source, _path in configured_sources:
+            name = source.parent_default_name
+            source.parent_id = client.find_studio(name)
+            if not source.parent_id:
+                msg = (
+                    "Parent studio '{}' not found in Stash. Create it (or fix the "
+                    "{} setting) and retry.".format(name, source.parent_setting)
+                )
+                log.LogError(msg)
+                return msg
+            source.icon = load_icon(server, source.icon_file)
 
-    databases = OFDatabase.find_databases(data_path)
+    # Discover every database once, remembering which path found it, so a db is
+    # never scanned twice when two sites share a parent directory.
+    databases = []
+    seen_paths = set()
+    for source, path in configured_sources:
+        found = SourceDatabase.find_databases(path)
+        for db_path in found:
+            if db_path in seen_paths:
+                continue
+            seen_paths.add(db_path)
+            databases.append(db_path)
+        if not found:
+            log.LogWarning("No user_data.db files found under {}".format(path))
     log.LogInfo("Found {} user_data.db file(s){}".format(
         len(databases), "" if workers <= 1 else " ({} parallel writers)".format(workers)))
     if not databases:
-        log.LogWarning("No user_data.db files found under {}".format(data_path))
         return
 
     processor = MediaProcessor(max_title_length, title_exclusions)
     if title_exclusions:
         log.LogInfo("Loaded {} title exclusion pattern(s).".format(len(title_exclusions)))
-    studios = StudioResolver(client, parent_studio_id, load_icon(server))
+    studios = StudioResolver(client)
     # The crew pass is surgical maintenance: it must never create performers as
     # a side effect of resolving @mentions, even if Create Missing Performers is
     # enabled for the sync tasks.
@@ -1199,10 +1310,16 @@ def main():
     for index, db_path in enumerate(databases):
         log.LogProgress(index / len(databases))
         try:
-            db = OFDatabase(db_path)
+            db = SourceDatabase(db_path)
         except Exception as e:
             log.LogError("Could not open {}: {}".format(db_path, e))
             continue
+        # Which site this database came from is read from the database itself
+        # (its schema_flags source), not from a setting -- so a data path holding
+        # more than one kind of library sorts itself out.
+        source = sources.profile_for_source(db.source())
+        # Only used for the URL on a performer this run creates.
+        performers.source = source
         try:
             profiles = db.profiles()
             if scoped_usernames is not None:
@@ -1214,7 +1331,7 @@ def main():
                 process_profile(
                     client, db, profile, processor, studios, performers, tags,
                     tag_matcher, full_sync, tag_only, crew_only, multiple_ok,
-                    skip_multi_file, keep_manual_edits, workers, totals,
+                    skip_multi_file, keep_manual_edits, workers, totals, source,
                 )
         except Exception as e:
             log.LogError("Error processing {}: {}".format(db_path, e))
