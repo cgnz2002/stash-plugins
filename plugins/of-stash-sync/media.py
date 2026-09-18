@@ -28,10 +28,23 @@ _EMOJI_RE = re.compile(
     flags=re.UNICODE,
 )
 
-# @mentions: allows an html tag before the name (e.g. <a href=''>@name</a>),
-# periods and dashes inside the name, and ignores trailing punctuation.
+# @mentions, with periods and dashes allowed inside the name.
+#
+# Both boundaries say what must NOT be there rather than listing what may be.
+# They used to be allow-lists -- whitespace or '>' before, whitespace or a few
+# punctuation marks after -- which silently dropped every credit written in a
+# way the list didn't anticipate, and creators write around a mention with
+# emoji, brackets and quotes constantly: "new video !@name", "(@name)",
+# "@name!!" were all missed.
+#
+# Leading: the character before '@' must not be one that could end an email
+# local part (word characters, '.', '-'). That is the whole point of the
+# guard -- it stops "fan@example.com" being read as a mention of
+# "example.com". Start of text, whitespace, emoji, punctuation and the '>'
+# closing an <a href=''>@name</a> all qualify.
+# Trailing: the name must simply not be cut off mid-word.
 _MENTION_RE = re.compile(
-    r"(?:^|\s|>)@([\w\-]+(?:\.[\w\-]+)*)(?=[\s\.\?\!…<,:;]|$)"
+    r"(?<![\w.\-])@([\w\-]+(?:\.[\w\-]+)*)(?![\w\-])"
 )
 
 # Profile links to a collaborator, e.g. onlyfans.com/ChicagoNerd or
@@ -188,29 +201,58 @@ class MediaProcessor:
         Both forms are deduplicated by username, and a URL credit wins over a
         bare @mention for the same name because it identifies the site.
 
+        The username is returned **as it was written**, capitals and all, because
+        a performer the caller has to create is named with it -- lowercasing here
+        would have Stash show '@BrandCo' as 'brandco' forever. Deduplication is
+        still case-insensitive (so '@BrandCo' and 'onlyfans.com/brandco' are one
+        credit, not two). When one credit is spelled several ways, a spelling
+        carrying capitals wins over an all-lowercase one -- either form can be
+        the careful one, and the point here is to not throw capitals away -- and
+        otherwise the first seen wins. Capitals are never invented, only kept.
+
+        Matching against existing performers is case-insensitive too (see
+        PerformerResolver), so the casing only ever decides the name of a NEW
+        performer -- it never splits a credit off an existing one.
+
         A profile URL's username is its first path segment; an OnlyFans post URL
         (`onlyfans.com/<postid>/<username>`) has a numeric first segment, so
         purely-numeric captures are skipped to avoid mistaking a post id for a
         username.
         """
-        order = []
+        order = []       # lowercase keys, in the order the post credits them
+        display = {}     # lowercase key -> the username as the post spelled it
         domains = {}
+
+        def remember(key, spelling):
+            """Keep the spelling with capitals; never downgrade to lowercase."""
+            current = display.get(key)
+            if current is None or (current.islower() and not spelling.islower()):
+                display[key] = spelling
+
         for match in _MENTION_RE.findall(text):
-            name = match.lower()
-            if name not in domains:
-                order.append(name)
-                domains[name] = None
+            # Same trailing-separator trim as the URL branch below: a username
+            # doesn't end in '.' or '-', so "@name-" credits 'name'.
+            name = match.rstrip(".-")
+            key = name.lower()
+            if not key:
+                continue
+            if key not in domains:
+                order.append(key)
+                domains[key] = None
+            remember(key, name)
         for domain, match in _PROFILE_URL_RE.findall(text):
             # Trailing '.'/'-' are almost always sentence punctuation, not part
             # of the username (usernames don't end in a separator).
-            name = match.lower().rstrip(".-")
+            name = match.rstrip(".-")
+            key = name.lower()
             # Skip the post-id form onlyfans.com/<postid>/<username>.
-            if not name or name.isdigit():
+            if not key or key.isdigit():
                 continue
-            if name not in domains:
-                order.append(name)
-            domains[name] = domain.lower()
-        return [(name, domains[name]) for name in order]
+            if key not in domains:
+                order.append(key)
+            remember(key, name)
+            domains[key] = domain.lower()
+        return [(display[key], domains[key]) for key in order]
 
     def studio_code(self, filename):
         if not filename:
