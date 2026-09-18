@@ -188,29 +188,53 @@ class MediaProcessor:
         Both forms are deduplicated by username, and a URL credit wins over a
         bare @mention for the same name because it identifies the site.
 
+        The username is returned **as it was written**, capitals and all, because
+        a performer the caller has to create is named with it -- lowercasing here
+        would have Stash show '@BrandCo' as 'brandco' forever. Deduplication is
+        still case-insensitive (so '@BrandCo' and 'onlyfans.com/brandco' are one
+        credit, not two). When one credit is spelled several ways, a spelling
+        carrying capitals wins over an all-lowercase one -- either form can be
+        the careful one, and the point here is to not throw capitals away -- and
+        otherwise the first seen wins. Capitals are never invented, only kept.
+
+        Matching against existing performers is case-insensitive too (see
+        PerformerResolver), so the casing only ever decides the name of a NEW
+        performer -- it never splits a credit off an existing one.
+
         A profile URL's username is its first path segment; an OnlyFans post URL
         (`onlyfans.com/<postid>/<username>`) has a numeric first segment, so
         purely-numeric captures are skipped to avoid mistaking a post id for a
         username.
         """
-        order = []
+        order = []       # lowercase keys, in the order the post credits them
+        display = {}     # lowercase key -> the username as the post spelled it
         domains = {}
+
+        def remember(key, spelling):
+            """Keep the spelling with capitals; never downgrade to lowercase."""
+            current = display.get(key)
+            if current is None or (current.islower() and not spelling.islower()):
+                display[key] = spelling
+
         for match in _MENTION_RE.findall(text):
-            name = match.lower()
-            if name not in domains:
-                order.append(name)
-                domains[name] = None
+            key = match.lower()
+            if key not in domains:
+                order.append(key)
+                domains[key] = None
+            remember(key, match)
         for domain, match in _PROFILE_URL_RE.findall(text):
             # Trailing '.'/'-' are almost always sentence punctuation, not part
             # of the username (usernames don't end in a separator).
-            name = match.lower().rstrip(".-")
+            name = match.rstrip(".-")
+            key = name.lower()
             # Skip the post-id form onlyfans.com/<postid>/<username>.
-            if not name or name.isdigit():
+            if not key or key.isdigit():
                 continue
-            if name not in domains:
-                order.append(name)
-            domains[name] = domain.lower()
-        return [(name, domains[name]) for name in order]
+            if key not in domains:
+                order.append(key)
+            remember(key, name)
+            domains[key] = domain.lower()
+        return [(display[key], domains[key]) for key in order]
 
     def studio_code(self, filename):
         if not filename:

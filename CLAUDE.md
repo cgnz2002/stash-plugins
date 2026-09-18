@@ -210,7 +210,14 @@ run, so there is no per-site task:
   the site that was linked, not the site being synced. `sources.profile_for_domain`
   maps the domain to a profile and returns `None` for a bare @mention, which
   makes `PerformerResolver.resolve(..., source=None)` fall back to the database's
-  own site. `process_text` also applies the **Title Exclusions** list
+  own site. The username is returned **as written**, because a performer created
+  from that credit is *named* with it — lowercasing would leave `@BrandCo` in
+  Stash as `brandco` forever. Dedup stays case-insensitive, and when one credit
+  is spelled several ways a spelling carrying capitals beats an all-lowercase
+  one (either form can be the careful one); capitals are kept, never invented.
+  Matching in `PerformerResolver` is case-insensitive throughout, so casing only
+  decides the name of a *new* performer and never splits a credit off an
+  existing one. `process_text` also applies the **Title Exclusions** list
   (`titleExclusions` setting, parsed by `parse_title_exclusions`): each entry is
   a case-insensitive regex removed from the **title only** — details/description
   keeps the original post text verbatim. Stripping happens after the details

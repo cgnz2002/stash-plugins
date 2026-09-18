@@ -55,6 +55,9 @@ creator profile in it:
   they were actually linked on — so a JustFor.Fans post plugging someone's
   OnlyFans creates that performer with their OnlyFans URL, not a JustFor.Fans
   one. A bare `@mention` names no site, so it uses the site being synced.
+  Usernames keep their **capitals**: `@BrandCo` is created as `BrandCo`, not
+  `brandco`. Matching existing performers stays case-insensitive, so this only
+  affects the name of a newly created one — it never makes a duplicate.
 - Credits anyone tagged as **crew** (see *Crew Tag Name*) in the scene
   **Director** / image **Photographer** field instead of the performers list.
 - Drops anyone tagged as a **sponsor** (see *Sponsor Tag ID*) from the performers
