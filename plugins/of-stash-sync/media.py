@@ -28,10 +28,23 @@ _EMOJI_RE = re.compile(
     flags=re.UNICODE,
 )
 
-# @mentions: allows an html tag before the name (e.g. <a href=''>@name</a>),
-# periods and dashes inside the name, and ignores trailing punctuation.
+# @mentions, with periods and dashes allowed inside the name.
+#
+# Both boundaries say what must NOT be there rather than listing what may be.
+# They used to be allow-lists -- whitespace or '>' before, whitespace or a few
+# punctuation marks after -- which silently dropped every credit written in a
+# way the list didn't anticipate, and creators write around a mention with
+# emoji, brackets and quotes constantly: "new video !@name", "(@name)",
+# "@name!!" were all missed.
+#
+# Leading: the character before '@' must not be one that could end an email
+# local part (word characters, '.', '-'). That is the whole point of the
+# guard -- it stops "fan@example.com" being read as a mention of
+# "example.com". Start of text, whitespace, emoji, punctuation and the '>'
+# closing an <a href=''>@name</a> all qualify.
+# Trailing: the name must simply not be cut off mid-word.
 _MENTION_RE = re.compile(
-    r"(?:^|\s|>)@([\w\-]+(?:\.[\w\-]+)*)(?=[\s\.\?\!…<,:;]|$)"
+    r"(?<![\w.\-])@([\w\-]+(?:\.[\w\-]+)*)(?![\w\-])"
 )
 
 # Profile links to a collaborator, e.g. onlyfans.com/ChicagoNerd or
@@ -217,11 +230,16 @@ class MediaProcessor:
                 display[key] = spelling
 
         for match in _MENTION_RE.findall(text):
-            key = match.lower()
+            # Same trailing-separator trim as the URL branch below: a username
+            # doesn't end in '.' or '-', so "@name-" credits 'name'.
+            name = match.rstrip(".-")
+            key = name.lower()
+            if not key:
+                continue
             if key not in domains:
                 order.append(key)
                 domains[key] = None
-            remember(key, match)
+            remember(key, name)
         for domain, match in _PROFILE_URL_RE.findall(text):
             # Trailing '.'/'-' are almost always sentence punctuation, not part
             # of the username (usernames don't end in a separator).

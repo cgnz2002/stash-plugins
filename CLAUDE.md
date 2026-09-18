@@ -204,7 +204,13 @@ run, so there is no per-site task:
   (`onlyfans.com/<username>`, `justfor.fans/<username>`), because creators
   sometimes credit a collaborator by URL instead of an @mention; the post-id URL
   form `onlyfans.com/<postid>/<username>` is excluded by skipping purely-numeric
-  first segments. It returns `(username, domain)` pairs rather than bare names:
+  first segments. `_MENTION_RE`'s boundaries are **deny-lists, and must stay
+  that way**: the character before `@` may be anything that can't end an email
+  local part (not `[\w.\-]`, which is the sole reason `fan@example.com` isn't a
+  credit), and the name just can't be cut off mid-word. They were allow-lists
+  (whitespace/`>` before, a short punctuation set after) and silently dropped
+  every credit written in an unanticipated way — `🚨@name`, `(@name)`, `@name😈`
+  — which is a *silent* miss, not an error, so don't reintroduce one. It returns `(username, domain)` pairs rather than bare names:
   a post can link a collaborator on **another** site (a JFF creator plugging
   their OnlyFans), and a performer created from that credit must get the URL of
   the site that was linked, not the site being synced. `sources.profile_for_domain`
