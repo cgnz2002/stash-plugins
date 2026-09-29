@@ -7,10 +7,52 @@ Stash v0.31.1 GraphQL schema.
 """
 
 import json
+import re
 import urllib.request
 import urllib.error
 
 import log
+
+# Stands in for a real id during a dry run. Never written anywhere -- it only
+# keeps a create's caller moving so the preview reaches the end of the run.
+DRY_RUN_ID = "dry-run"
+
+# The first field of a mutation body ("mutation X($i: T!) { sceneUpdate(...)").
+# Reads are left alone: a dry run must still see the real library to preview
+# against it.
+_MUTATION_FIELD_RE = re.compile(
+    r"\bmutation\b[^{]*\{\s*([A-Za-z_][A-Za-z0-9_]*)"
+)
+
+
+def _mutation_field(query):
+    match = _MUTATION_FIELD_RE.search(query or "")
+    return match.group(1) if match else None
+
+
+def _summarize(payload):
+    """Compact one-line description of what a write would have changed."""
+    if not isinstance(payload, dict):
+        return "(no fields)"
+    parts = []
+    if payload.get("id"):
+        parts.append("id={}".format(payload["id"]))
+    for key in ("title", "name", "date", "code", "director", "photographer"):
+        if payload.get(key):
+            parts.append("{}={!r}".format(key, payload[key]))
+    if payload.get("urls"):
+        parts.append("url={}".format(payload["urls"][0]))
+    if payload.get("studio_id"):
+        parts.append("studio={}".format(payload["studio_id"]))
+    for key, label in (("performer_ids", "performers"), ("tag_ids", "tags"),
+                       ("scene_ids", "scenes"), ("ids", "images")):
+        if key in payload and isinstance(payload[key], list):
+            parts.append("{}={}".format(label, len(payload[key])))
+    if payload.get("details"):
+        parts.append("details[{}]".format(len(payload["details"])))
+    if payload.get("organized"):
+        parts.append("organized")
+    return ", ".join(parts) or "(no fields)"
 
 
 class StashClient:
@@ -21,7 +63,10 @@ class StashClient:
     # write that eventually lands beats a failed one.
     REQUEST_TIMEOUT = 300
 
-    def __init__(self, server_connection):
+    def __init__(self, server_connection, dry_run=False):
+        # When set, every mutation is logged and skipped while reads still run,
+        # so a task previews exactly what a real sync would change.
+        self.dry_run = dry_run
         scheme = server_connection.get("Scheme") or "http"
         port = server_connection.get("Port") or 9999
         cookie = server_connection.get("SessionCookie") or {}
@@ -53,6 +98,20 @@ class StashClient:
         return False
 
     def call(self, query, variables=None):
+        # Dry run is enforced HERE, on the one chokepoint every request goes
+        # through, rather than in each mutation method: a check per method is a
+        # check someone forgets when adding the next mutation, and the failure
+        # mode is writing to a library the user was promised wouldn't be
+        # touched. Reads still run, so a preview reflects the real library.
+        if self.dry_run:
+            field = _mutation_field(query)
+            if field:
+                log.LogInfo("[dry run] {} {}".format(
+                    field, _summarize((variables or {}).get("input") or variables or {})))
+                # Shaped like the real response so callers that read an id back
+                # (create_* especially) carry on instead of treating it as a
+                # failure and logging errors through the whole run.
+                return {field: {"id": DRY_RUN_ID}}
         payload = json.dumps({"query": query, "variables": variables or {}}).encode("utf-8")
         req = urllib.request.Request(self.url, data=payload, method="POST")
         req.add_header("Content-Type", "application/json")

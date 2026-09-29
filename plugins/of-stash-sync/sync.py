@@ -1365,7 +1365,11 @@ def main():
     tag_only = mode == "tag"
     crew_only = mode == "crew"
 
-    client = StashClient(server)
+    # Dry run comes from either the task ("Preview") or the setting, so a one-off
+    # preview never needs the setting toggled and back. The plugin config is read
+    # through this same client, so the arg has to be honoured before that read
+    # and the setting folded in immediately after.
+    client = StashClient(server, dry_run=bool(args.get("dryRun")))
     # Adopt the non-expiring API key up front. A full sync can run long enough to
     # outlive Stash's session cookie, which then 401s every remaining request
     # (whole creators fail near the end of the run). The API key avoids that; if
@@ -1425,6 +1429,12 @@ def main():
     auto_create = bool(get_setting(config, "autoCreatePerformers", False))
     auto_tag_from_text = bool(get_setting(config, "autoTagFromText", False))
     skip_multi_file = bool(get_setting(config, "skipMultiFile", False))
+    if not client.dry_run and bool(get_setting(config, "dryRun", False)):
+        client.dry_run = True
+    if client.dry_run:
+        log.LogInfo(
+            "DRY RUN: every change is logged and nothing is written to Stash."
+        )
     crew_tag_id = get_setting(config, "crewTagId", "")
     sponsor_tag_id = get_setting(config, "sponsorTagId", "")
     keep_manual_edits = bool(get_setting(config, "keepManualEdits", False))

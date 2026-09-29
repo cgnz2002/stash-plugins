@@ -3,13 +3,15 @@
 A native [Stash](https://stashapp.cc) plugin that syncs scraped fan-site
 metadata into matching Stash scenes and images. It reads the `user_data.db`
 files written by **[OF-Scraper](https://github.com/datawhores/OF-Scraper)**
-(OnlyFans) and **jff-scraper** (JustFor.Fans) and writes title, details, date,
-post URL, performers, studio and tags onto the corresponding media, then marks
-them organized.
+(OnlyFans) and **jff-scraper** (JustFor.Fans), and the on-disk post files
+written by **[patreon-dl](https://github.com/patrickkfkan/patreon-dl)**
+(Patreon), and writes title, details, date, post URL, performers, studio and
+tags onto the corresponding media, then marks them organized.
 
-**One task covers every site.** Which site a database belongs to is read from
-the database itself, so you don't pick a mode — point the plugin at each
-library's path and run one sync. See [Multiple sites](#multiple-sites).
+**One task covers every site.** Which site a library belongs to is read from
+the library itself, so you don't pick a mode — point the plugin at each
+library's path and run one sync. There are also per-site tasks when you only
+want one scanned. See [Multiple sites](#multiple-sites).
 
 The OnlyFans half is a native re-implementation of
 [`timekillerj/ofscraper-stash-sync`](https://github.com/timekillerj/ofscraper-stash-sync),
@@ -24,10 +26,12 @@ Each database declares its own site, so a path holding both kinds of library
 sorts itself out and nothing has to be configured twice. What differs per site
 is only what has to:
 
-| | OnlyFans | JustFor.Fans |
-|---|---|---|
-| Post URL | rebuilt from the post id | read from the link the scraper captured (JFF URLs carry an encoded key and can't be rebuilt) |
-| Studio | `<user> (OnlyFans)` | `<user> (JustForFans)` |
+| | OnlyFans | JustFor.Fans | Patreon |
+|---|---|---|---|
+| Source | `user_data.db` | `user_data.db` | **no database** — each post's `post_info` files, read off disk |
+| Post URL | rebuilt from the post id | read from the link the scraper captured (JFF URLs carry an encoded key and can't be rebuilt) | the captured URL (it carries the slug) |
+| Title | derived from the post text | derived from the post text | **the authored title**, used as written |
+| Studio | `<user> (OnlyFans)` | `<user> (JustForFans)` | `<user> (Patreon)` |
 | Site tag | `OnlyFans` | `JustFor.Fans` |
 | Paid content | post price > 0 | the scraper's Free/**Paid** tier (JFF has no price, so a price rule would never fire) |
 | Scene `code` | filename stem (OF-Scraper names files by media id) | the post id (jff-scraper names files `<date> - <post id> - <desc>`) |
@@ -140,6 +144,9 @@ Both current and older OF-Scraper database layouts are supported.
 | OnlyFans Parent Studio | `OnlyFans (network)` | Top-level studio that per-creator studios are nested under. |
 | JustFor.Fans Data Path | (blank) | Directory searched recursively for jff-scraper `user_data.db` files (e.g. `/data/justforfans`). Leave blank if you have no JFF library. |
 | JustFor.Fans Parent Studio | `JustForFans (network)` | Top-level studio for JustFor.Fans creators. Must already exist in Stash. |
+| Patreon Data Path | (blank) | Directory patreon-dl downloads into, as seen inside the Stash container (e.g. `/data/patreon`, **not** the NAS path). Each `<vanity> - <Creator Name>` folder beneath it is one creator. Leave blank if you have no Patreon library. |
+| Patreon Parent Studio | `Patreon (network)` | Top-level studio for Patreon creators. Must already exist in Stash. |
+| Dry Run | off | Every task logs what it *would* change and writes nothing. Reads still happen, so the preview reflects your real library. See [Dry run](#dry-run). |
 | Max Title Length | `65` | Titles longer than this are truncated at a sentence or word boundary. |
 | Allow Multiple Performer Matches | off | If several performers match a username, attach all of them instead of skipping. |
 | Create Missing Performers | off | Create a sparse performer for the creator and any unmatched `@mentions` instead of skipping. |
@@ -173,6 +180,13 @@ Stash first so the scenes and images exist.
   the performer back to its OF username via the performer's name *and aliases*, so
   as long as the OF username is set as the performer's name or an alias (as usual),
   the button finds the right creator.
+- **Sync OnlyFans Only** / **Sync JustFor.Fans Only** / **Sync Patreon Only** -
+  a plain Sync scoped to one site, for when you've just added content to one
+  library and don't want the others walked. The site is confirmed from each
+  library itself, not the path it was found under, so a database belonging to
+  another site sitting under that path is skipped rather than swept in.
+- **Preview (Dry Run)** - a full sync that writes nothing, logging every change
+  it would make. See [Dry run](#dry-run).
 - **Update Crew & Sponsors** - re-apply only the crew and sponsor logic to ALL
   synced scenes and images: move crew-tagged people (see *Crew Tag ID*) into the
   Director / Photographer field and out of the performers list, and drop
@@ -207,6 +221,69 @@ browsing their work is hard; a gallery groups a whole post, so it carries the
 crew credit as a real performer link (their crew tag still distinguishes them).
 The gallery's Photographer field is left empty. So: scenes and images move crew
 into Director/Photographer, while the post's gallery keeps them clickable.
+
+### Dry run
+
+**Preview (Dry Run)** runs a full sync that writes nothing. Every change is
+logged instead — each scene, image and gallery it would update, each studio,
+performer, tag and gallery it would create:
+
+```
+[dry run] galleryCreate title='Moano & Ariel', performers=1, tags=1, scenes=2, organized
+[dry run] sceneUpdate id=412, title='Preview for Gold Tiers', date='2026-09-29', organized
+```
+
+Reads still happen, so the preview is against your real library rather than a
+guess. The *Dry Run* setting does the same for **every** task; the Preview task
+just forces it on for one run without you toggling the setting back afterwards.
+
+**Run this before a site's first sync.** It is the cheapest way to catch a data
+path pointing at the wrong place, a parent studio that doesn't exist yet, or a
+library that will match far more (or far less) media than you expected.
+
+### Patreon
+
+Patreon works differently from the other two and it's worth knowing how:
+
+- **There is no database.** patreon-dl writes each post's metadata beside its
+  media, so the plugin reads `post_info/info.txt` and `post-api.json` straight
+  off the data path. A creator is any folder containing `posts/` or
+  `collections/`, which is why patreon-dl's `logs/`, `.patreon-dl/` and
+  `patreon-dl.conf.bak` are ignored rather than mistaken for creators.
+- **Titles are real**, so they're used as written instead of being derived from
+  the post body — which is kept whole as the details. Title Exclusions still
+  apply.
+- **Video isn't in a folder of its own.** patreon-dl drops `.mp4` into
+  `images/` and `attachments/` alongside the pictures, so a post commonly
+  produces a gallery *and* scenes, exactly like an OnlyFans post does.
+- **Collections become galleries.** Stash has no nested galleries and no
+  gallery-to-group link, so a collection can't be a gallery *of* galleries.
+  It's flattened: one gallery per collection, holding every member post's
+  images and linking every member post's scenes. Keyed by collection URL, so
+  renaming a collection on Patreon updates the gallery instead of making a
+  second one.
+
+#### Auxiliary folders (important)
+
+`post_info/`, `.thumbnails/`, `image_previews/` and `embed/` are **not** post
+media, but they are full of real image files — `post_info/` holds
+`cover-image.jpg` and `thumbnail.jpg`, and `.thumbnails/` holds a byte-for-byte
+duplicate of the cover. On a real library that's roughly **two junk images for
+every genuine one**.
+
+The plugin ignores them, so they are never given post metadata. But *Stash*
+will still ingest them if they're inside a scanned library path, inflating your
+image count and creating a junk gallery per post. Add them to
+**Settings → Library → Excluded patterns**:
+
+```
+post_info
+\.thumbnails
+image_previews
+```
+
+If you ran an older standalone Patreon plugin, galleries like this may already
+exist — filter galleries by path containing `post_info` to find them.
 
 ### Sponsors (brands and advertisers)
 
