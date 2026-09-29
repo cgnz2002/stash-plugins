@@ -193,9 +193,9 @@ Stash first so the scenes and images exist.
   library. This is also how you pick up media an *older* plugin already marked
   organized.
 - **Preview (Dry Run)** - a full sync that writes nothing, logging every change
-  it would make. See [Dry run](#dry-run). To preview **one site**, turn the
-  *Dry Run* setting on and run that site's Full Sync task — the setting applies
-  to every task, so you get a scoped preview without a task per site per mode.
+  it would make, across every configured site. See [Dry run](#dry-run).
+- **Preview OnlyFans/JustFor.Fans/Patreon (Dry Run)** - the same, scoped to one
+  site. This is the sensible first run on a newly configured library.
 - **Update Crew & Sponsors** - re-apply only the crew and sponsor logic to ALL
   synced scenes and images: move crew-tagged people (see *Crew Tag ID*) into the
   Director / Photographer field and out of the performers list, and drop
@@ -243,8 +243,13 @@ performer, tag and gallery it would create:
 ```
 
 Reads still happen, so the preview is against your real library rather than a
-guess. The *Dry Run* setting does the same for **every** task; the Preview task
-just forces it on for one run without you toggling the setting back afterwards.
+guess. The *Dry Run* setting does the same for **every** task; the Preview tasks
+just force it on for one run without you toggling the setting back afterwards —
+which also means you can't forget to turn it off again.
+
+**Preview is a FULL sync on purpose.** A plain sync skips media already marked
+organized, so previewing one would show you almost nothing on a library that has
+been synced before — including one synced by an older version of this plugin.
 
 **Run this before a site's first sync.** It is the cheapest way to catch a data
 path pointing at the wrong place, a parent studio that doesn't exist yet, or a

@@ -1,6 +1,6 @@
 name: Fan Site Metadata Sync (OnlyFans + JustFor.Fans + Patreon)
 description: Sync scraped metadata (title, details, date, post URL, performers, studio, tags) from OF-Scraper and jff-scraper user_data.db files, and from patreon-dl's on-disk post files, into matching Stash scenes and images, group each post's media into a gallery, and adopt the galleries Stash makes from scanned image folders. Each database's site is detected from the database itself.
-version: 2.5.0
+version: 2.6.0
 url: https://github.com/cgnz2002/stash-plugins
 
 settings:
@@ -135,6 +135,24 @@ tasks:
     description: Preview a FULL sync in the log without writing anything to Stash - every scene, image and gallery it would update, and every studio, performer, tag and gallery it would create. Safe to run first, and the sensible thing to do before a site's first sync.
     defaultArgs:
       mode: full
+      dryRun: true
+  - name: Preview OnlyFans (Dry Run)
+    description: Preview a full OnlyFans sync in the log without writing anything to Stash. Scoped to the OnlyFans data path, so the other sites aren't walked.
+    defaultArgs:
+      mode: full
+      site: onlyfans
+      dryRun: true
+  - name: Preview JustFor.Fans (Dry Run)
+    description: Preview a full JustFor.Fans sync in the log without writing anything to Stash. Scoped to the JustFor.Fans data path, so the other sites aren't walked.
+    defaultArgs:
+      mode: full
+      site: justforfans
+      dryRun: true
+  - name: Preview Patreon (Dry Run)
+    description: Preview a full Patreon sync in the log without writing anything to Stash. Scoped to the Patreon data path, so the other sites aren't walked. The sensible first run on a new Patreon library.
+    defaultArgs:
+      mode: full
+      site: patreon
       dryRun: true
   - name: Sync Performer
     description: Full re-sync of a SINGLE performer, across every configured site. Triggered by the "Sync Fan Sites" button on a performer's page (it passes the performer id); running it here without one does nothing.
