@@ -1506,15 +1506,38 @@ def main():
     if not tag_only and not crew_only:
         for source, _path in configured_sources:
             name = source.parent_default_name
+            # Loaded first so a parent created below gets the site logo too --
+            # Stash accepts a studio image on create only.
+            source.icon = load_icon(server, source.icon_file)
             source.parent_id = client.find_studio(name)
             if not source.parent_id:
-                msg = (
-                    "Parent studio '{}' not found in Stash. Create it (or fix the "
-                    "{} setting) and retry.".format(name, source.parent_setting)
-                )
-                log.LogError(msg)
-                return msg
-            source.icon = load_icon(server, source.icon_file)
+                # Create it rather than failing the run. Making the user go and
+                # add a studio by hand before their first sync is friction for
+                # no benefit: the plugin already creates every per-creator
+                # studio beneath it, so it may as well create the one they all
+                # hang off. find_studio is alias-aware, so an existing studio
+                # carrying the name as an alias is reused instead.
+                try:
+                    source.parent_id = client.create_studio(
+                        name, None, None,
+                        "{} creators, synced by Fan Site Metadata Sync.".format(source.label),
+                        source.icon,
+                    )
+                except RuntimeError as e:
+                    # create_studio doesn't swallow its own errors, and an
+                    # unhandled one here would end the run as a traceback
+                    # instead of the actionable message below.
+                    log.LogWarning("Could not create parent studio '{}': {}".format(name, e))
+                    source.parent_id = None
+                if not source.parent_id:
+                    msg = (
+                        "Could not find or create the parent studio '{}'. Create "
+                        "it in Stash (or fix the {} setting) and retry.".format(
+                            name, source.parent_setting)
+                    )
+                    log.LogError(msg)
+                    return msg
+                log.LogInfo("Created parent studio '{}'".format(name))
 
     # Discover every library once, remembering the site whose path found it, so
     # one is never scanned twice when two sites share a parent directory.

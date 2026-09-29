@@ -119,7 +119,10 @@ Both current and older OF-Scraper database layouts are supported.
 - Stash v0.31.x (verified against v0.31.1).
 - No Python dependencies. The plugin uses only the Python standard library, so
   nothing needs to be installed into the Stash container.
-- The parent studio (default `OnlyFans (network)`) must already exist in Stash.
+- The parent studio (default `OnlyFans (network)`, and one per site) is created
+  automatically if it doesn't exist, with that site's logo. An existing studio
+  carrying the name — as its name *or* an alias — is reused rather than
+  duplicated.
 - **For large libraries, set an API key** in Stash **Settings → Security** (the
   plugin picks it up automatically). A big Full Sync can run long enough to
   outlive Stash's session cookie, which then returns `HTTP 401` on every
@@ -141,11 +144,11 @@ Both current and older OF-Scraper database layouts are supported.
 | Setting | Default | Description |
 |---|---|---|
 | OnlyFans Data Path | (one path required) | Directory searched recursively for `user_data.db` files, as seen inside the Stash container (e.g. `/data/only fans`). |
-| OnlyFans Parent Studio | `OnlyFans (network)` | Top-level studio that per-creator studios are nested under. |
+| OnlyFans Parent Studio | `OnlyFans (network)` | Top-level studio that per-creator studios are nested under. Created automatically if missing. |
 | JustFor.Fans Data Path | (blank) | Directory searched recursively for jff-scraper `user_data.db` files (e.g. `/data/justforfans`). Leave blank if you have no JFF library. |
-| JustFor.Fans Parent Studio | `JustForFans (network)` | Top-level studio for JustFor.Fans creators. Must already exist in Stash. |
+| JustFor.Fans Parent Studio | `JustForFans (network)` | Top-level studio for JustFor.Fans creators. Created automatically if missing. |
 | Patreon Data Path | (blank) | Directory patreon-dl downloads into, as seen inside the Stash container (e.g. `/data/patreon`, **not** the NAS path). Each `<vanity> - <Creator Name>` folder beneath it is one creator. Leave blank if you have no Patreon library. |
-| Patreon Parent Studio | `Patreon (network)` | Top-level studio for Patreon creators. Must already exist in Stash. |
+| Patreon Parent Studio | `Patreon (network)` | Top-level studio for Patreon creators. Created automatically if missing. |
 | Dry Run | off | Every task logs what it *would* change and writes nothing. Reads still happen, so the preview reflects your real library. See [Dry run](#dry-run). |
 | Max Title Length | `65` | Titles longer than this are truncated at a sentence or word boundary. |
 | Allow Multiple Performer Matches | off | If several performers match a username, attach all of them instead of skipping. |

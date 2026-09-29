@@ -1,6 +1,6 @@
 name: Fan Site Metadata Sync (OnlyFans + JustFor.Fans + Patreon)
 description: Sync scraped metadata (title, details, date, post URL, performers, studio, tags) from OF-Scraper and jff-scraper user_data.db files, and from patreon-dl's on-disk post files, into matching Stash scenes and images, group each post's media into a gallery, and adopt the galleries Stash makes from scanned image folders. Each database's site is detected from the database itself.
-version: 2.4.0
+version: 2.5.0
 url: https://github.com/cgnz2002/stash-plugins
 
 settings:
@@ -10,7 +10,7 @@ settings:
     type: STRING
   parentStudioName:
     displayName: OnlyFans Parent Studio
-    description: "Name of the top-level OnlyFans studio. Per-creator studios are created beneath it. It must already exist in Stash. Default: OnlyFans (network)"
+    description: "Name of the top-level OnlyFans studio. Per-creator studios are created beneath it. Created automatically if it doesn't exist. Default: OnlyFans (network)"
     type: STRING
   jffDataPath:
     displayName: JustFor.Fans Data Path
@@ -18,7 +18,7 @@ settings:
     type: STRING
   jffParentStudioName:
     displayName: JustFor.Fans Parent Studio
-    description: "Name of the top-level JustFor.Fans studio. Per-creator studios are created beneath it. It must already exist in Stash. Default: JustForFans (network)"
+    description: "Name of the top-level JustFor.Fans studio. Per-creator studios are created beneath it. Created automatically if it doesn't exist. Default: JustForFans (network)"
     type: STRING
   patreonDataPath:
     displayName: Patreon Data Path
@@ -26,7 +26,7 @@ settings:
     type: STRING
   patreonParentStudioName:
     displayName: Patreon Parent Studio
-    description: "Name of the top-level Patreon studio. Per-creator studios are created beneath it. It must already exist in Stash. Default: Patreon (network)"
+    description: "Name of the top-level Patreon studio. Per-creator studios are created beneath it. Created automatically if it doesn't exist. Default: Patreon (network)"
     type: STRING
   maxTitleLength:
     displayName: Max Title Length
