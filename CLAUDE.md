@@ -371,6 +371,20 @@ asks the profile what to open.
   exists elsewhere; `embed/` holds media that exists nowhere else, which is the
   whole distinction. Its `.txt` descriptors get indexed too, harmlessly: Stash
   never ingests one, so it can never match a scene or image.
+- **Patreon basenames are not unique; match on the path.** A creator who posts
+  the same video at two tiers gets the identical filename in both post folders
+  (`embed/TARZAN & MILO.mp4.mp4` under both `- 4k Diamond` and
+  `- 1080p - Gold`). Keyed by basename that is two silent bugs: one file evicts
+  the other from the index, so a Stash scene is never processed at all; and
+  whichever post `os.walk` reached first supplies the metadata for both. So
+  `PatreonLibrary` keys `_by_path` on the absolute path and exposes
+  `media_by_path()`, `sync.py`'s `media_map` and `group_media_by_post`'s index
+  are both keyed by path, and lookups go path-first with the basename as
+  fallback. `SourceDatabase.media_by_path()` returns None by design — OF-Scraper
+  and jff-scraper name files after the media id, so a basename already
+  identifies a post there — and the fallback covers it, the same degrading
+  -capability pattern as `hashtags()`/`tier()`. A multi-file scene yields one
+  `media_map` entry per file, so `seen_media` keeps it from being written twice.
 - **Video has no folder of its own** — `.mp4` sits in `images/`, `attachments/`
   and `embed/` next to the pictures (85 and 65 in that same log), alongside
   `.psd`/`.zip`/`.pdf` Stash won't ingest. The media index is therefore

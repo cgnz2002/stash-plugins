@@ -406,7 +406,8 @@ class PatreonLibrary:
         self.path = creator_path
         self.vanity = vanity_from_folder(creator_path)
         self._posts = {}         # post id -> post dict
-        self._media = {}         # basename -> media dict
+        self._media = {}         # basename -> media dict (fallback; not unique)
+        self._by_path = {}       # absolute path -> media dict (authoritative)
         self._by_post = {}       # post id -> [media dict]
         self._load()
 
@@ -426,34 +427,41 @@ class PatreonLibrary:
             if source["vanity"]:
                 # The API's vanity is authoritative; the folder name is a guess.
                 self.vanity = source["vanity"]
-            for basename in self._media_files(source["directory"]):
+            for path in self._media_files(source["directory"]):
+                basename = os.path.basename(path)
                 entry = {
                     "media_id": None,
                     "post_id": post_id,
                     "link": source["url"],
                     "filename": basename,
+                    "path": path,
                     "api_type": source["api_type"],
                     "media_type": None,
                     "posted_at": source["date"],
                 }
-                # A basename collision across posts would silently credit the
-                # wrong post, so the first one wins and the duplicate is
-                # dropped rather than overwriting it.
+                # Patreon basenames are NOT unique across posts: a creator who
+                # posts the same video at two tiers gets the same filename in
+                # both post folders (e.g. embed/TARZAN & MILO.mp4.mp4 under both
+                # "- 4k Diamond" and "- 1080p - Gold"). The full path always is
+                # unique, so it is the primary key; the basename index stays as
+                # a fallback for callers that only have a name, with the first
+                # post winning rather than a later one silently overwriting it.
+                self._by_path[path] = entry
                 self._media.setdefault(basename, entry)
                 self._by_post.setdefault(post_id, []).append(entry)
 
     @staticmethod
     def _media_files(post_dir):
-        """Basenames of a post's real media, skipping the auxiliary folders."""
-        names = []
+        """Paths of a post's real media, skipping the auxiliary folders."""
+        paths = []
         for dirpath, dirs, files in os.walk(post_dir):
             dirs[:] = [d for d in dirs if d not in EXCLUDED_DIRS]
             if os.path.basename(dirpath) in EXCLUDED_DIRS:
                 continue
             for name in files:
                 if not name.endswith(".part"):   # in-progress download
-                    names.append(name)
-        return names
+                    paths.append(os.path.join(dirpath, name))
+        return paths
 
     # ----- SourceDatabase interface ---------------------------------------
 
@@ -465,6 +473,15 @@ class PatreonLibrary:
 
     def media_by_filename(self, user_id, filename):
         return self._media.get(filename)
+
+    def media_by_path(self, user_id, path):
+        """The media at an exact path, or None.
+
+        Preferred over media_by_filename wherever the caller has the path: a
+        Patreon basename can belong to several posts, and only the path says
+        which one.
+        """
+        return self._by_path.get(path)
 
     def medias_for_model(self, user_id):
         rows = []
