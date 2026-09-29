@@ -279,11 +279,15 @@ Patreon works differently from the other two and it's worth knowing how:
 
 #### Auxiliary folders (important)
 
-`post_info/`, `.thumbnails/`, `image_previews/` and `embed/` are **not** post
+`post_info/`, `.thumbnails/` and `image_previews/` are **not** post
 media, but they are full of real image files — `post_info/` holds
 `cover-image.jpg` and `thumbnail.jpg`, and `.thumbnails/` holds a byte-for-byte
 duplicate of the cover. On a real library that's roughly **two junk images for
 every genuine one**.
+
+`embed/` is **not** one of these, despite looking like it. patreon-dl downloads
+embedded video into it, so it holds genuine media — often a post's only video.
+Don't add it to the exclusions below or those scenes stop syncing.
 
 The plugin ignores them, so they are never given post metadata. But *Stash*
 will still ingest them if they're inside a scanned library path, inflating your

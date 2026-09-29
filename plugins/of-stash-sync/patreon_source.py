@@ -9,6 +9,7 @@ Layout produced by patreon-dl:
     <data path>/<vanity> - <Creator Name>/
         posts/<postId> - <Post Title>/
             images/ attachments/ audio/     media (Stash ingests each folder as a gallery)
+            embed/                          media too -- downloaded embedded video
             .thumbnails/  post_info/*.webp  auxiliary (ignored)
             post_info/
                 info.txt                    flat "Key: value" summary  (primary source)
@@ -39,10 +40,15 @@ _LEADING_ID_RE = re.compile(r"^\s*(\d+)")
 # -- so without this, roughly two thirds of the "Patreon images" in a library are
 # junk, each one carrying its post's metadata and marked organized.
 #
-# embed/ holds only .txt descriptors of embedded media, so it is harmless today,
-# but it is not post media either and is excluded for the same reason.
+# embed/ is deliberately NOT here. It looks auxiliary and an earlier version of
+# this list excluded it on the assumption that it held only .txt descriptors of
+# embedded media -- it does not. patreon-dl downloads embedded video into it, so
+# excluding it silently dropped whole scenes (e.g. a post's only video living at
+# <post>/embed/<title>.mp4). The three folders above hold duplicates of media
+# that exists elsewhere; embed/ holds media that exists nowhere else, which is
+# the whole difference.
 EXCLUDED_DIRS = frozenset({
-    "post_info", ".thumbnails", "image_previews", "embed",
+    "post_info", ".thumbnails", "image_previews",
 })
 
 # Where a post's real media lives. Deliberately NOT an extension allow-list:
