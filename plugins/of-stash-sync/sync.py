@@ -336,7 +336,7 @@ class StudioResolver:
             )
             if studio_id:
                 self._map[name.strip().lower()] = studio_id
-            log.LogInfo("Created studio '{}'".format(name))
+                log.LogInfo("Created studio '{}'".format(name))
         elif source.icon and studio_id in self._no_image:
             # Back-fill the logo onto a studio created before the plugin shipped
             # an icon for this site: Stash only accepts a studio image on create,
