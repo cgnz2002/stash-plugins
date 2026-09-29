@@ -386,7 +386,14 @@ asks the profile what to open.
   which filters *for* `folder`; the field is the discriminator either way, so
   the studio query fetches it.
 - **Titles are authored**, hence `real_titles`: used as written, with the body
-  kept whole as details. Title Exclusions still apply.
+  kept whole as details. Title Exclusions still apply — `SourceProfile.title()`
+  strips on **both** branches, so Patreon's authored titles and the other
+  sites' derived ones behave alike. Note `real_titles` deliberately skips
+  `maxTitleLength`: an authored title is a deliberate length, unlike one cut
+  out of a wall of post text. Collection gallery titles are stripped too, at
+  their own call site in `sync_collection_galleries` — they don't route through
+  `SourceProfile.title()`, so adding a title path means checking it reaches
+  there as well.
 - **Collections → one flat gallery each** (`sync_collection_galleries`), holding
   member posts' images and linking their scenes. Stash has no nested galleries
   and no gallery→group link, so a gallery *of* galleries is impossible; Groups

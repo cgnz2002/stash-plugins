@@ -860,7 +860,12 @@ def sync_collection_galleries(client, db, profile, processor, studios, performer
     tasks = []
     for coll in collections:
         url = coll["url"]
-        title = coll["title"] or "Collection {}".format(coll["collection_id"])
+        # Exclusions apply here as they do to every other title the plugin
+        # writes: a creator who prefixes their post titles with boilerplate
+        # generally prefixes their collection titles with it too. The synthetic
+        # fallback isn't authored text, so it is left alone.
+        title = processor.apply_title_exclusions(coll["title"]) or \
+            "Collection {}".format(coll["collection_id"])
         image_ids, scene_ids = [], []
         for post_id in coll["post_ids"]:
             group = groups.get(str(post_id))
