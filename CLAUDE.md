@@ -17,14 +17,18 @@ Published source URL (add this in Stash → Settings → Plugins → Add Source)
 https://cgnz2002.github.io/stash-plugins/main/index.yml
 ```
 
-Currently there are two plugins:
+Currently there are two plugins (the Patreon one is being retired — see
+*Patreon* below):
 
 - **`plugins/of-stash-sync/`** — **Fan Site Metadata Sync**. Syncs scraped
   fan-site metadata into matching Stash scenes and images: title, details, date,
   post URL, performers, studio, code, tags and the `organized` flag. It serves
   **several sites from one task** — OnlyFans (from
-  [OF-Scraper](https://github.com/datawhores/OF-Scraper)) and JustFor.Fans (from
-  jff-scraper) — because their `user_data.db` schemas are the same shape.
+  [OF-Scraper](https://github.com/datawhores/OF-Scraper)), JustFor.Fans (from
+  jff-scraper) and Patreon (from
+  [patreon-dl](https://github.com/patrickkfkan/patreon-dl)). The first two share
+  a `user_data.db` schema shape; Patreon has **no database at all** and is read
+  off disk through an adapter (see *Patreon* below).
   **The directory and manifest filename are still `of-stash-sync`, and that is
   deliberate: Stash keys plugin settings by plugin id, so keeping it preserves
   every existing install's configuration.** The per-site differences live in
@@ -82,9 +86,13 @@ mirrors (numeric `model_id`, `posted_at`) and then extends.
   `is_pinned()` False, so the identical code path serves both. It still detects
   the *older* OF-Scraper layout too (no `model_id`, date in `created_at`, empty
   `profiles`).
+- **`patreon_source.py`** — patreon-dl's on-disk layout: the post/collection
+  parsers, plus `PatreonLibrary`, an adapter that answers the same questions
+  `SourceDatabase` does so `sync.py` never learns Patreon has no database.
 - **`sources.py`** — a `SourceProfile` per site holds everything that genuinely
-  differs, and `profile_for_source()` picks one **per database** from its
-  `schema_flags` source value. Detection is per-database, not a setting, so a
+  differs, including `reader` (what opens one of that site's libraries) and
+  `real_titles`. `profile_for_source()` picks one **per library** from its
+  reported source. Detection is per-database, not a setting, so a
   data path holding both kinds of library sorts itself out. Adding a site means
   adding a profile, not branching through sync.py.
 
@@ -161,6 +169,20 @@ run, so there is no per-site task:
   the per-post galleries' metadata.
 - `mode: tag` — additive only; adds tags from post text, never touches other
   fields. Safe over manually edited media.
+- `args.site` — an **orthogonal** scope, not a mode: `{mode: sync, site: <slug>}`
+  backs the per-site tasks. Applied twice on purpose — once when building the
+  configured source list, and again per library against the site the *library*
+  reports — because both scrapers name their file `user_data.db` and two sites
+  can share a parent directory, so path filtering alone would let "Sync OnlyFans
+  Only" sync a JustFor.Fans library. An unknown slug is fatal rather than a
+  silent fallback to every site.
+- `args.dryRun` — set by "Preview (Dry Run)", and also a setting. Enforced in
+  **`StashClient.call()`**, the one chokepoint every request passes through,
+  rather than per mutation method: a per-method check is one someone forgets to
+  add with the next mutation, and the failure mode is writing to a library the
+  user was told wouldn't be touched. Reads still run, so a preview reflects the
+  real library; mutations return `{<field>: {"id": DRY_RUN_ID}}` so `create_*`
+  callers carry on instead of erroring through the whole run.
 - `mode: crew` — surgical credits pass ("Update Crew & Sponsors"). For all synced
   media it moves crew-tagged people out of the performers list and into the scene
   `director` / image `photographer` field, and drops sponsor-tagged accounts in
@@ -316,6 +338,44 @@ run, so there is no per-site task:
   stopping at the first crew hit. The tag is only ever **added**, never removed.
   Note `is_sponsor()` reads the cache `resolve()` fills, so it must be called
   *after* `resolve()` for that username.
+
+### Patreon
+
+Patreon is the one source with **no database**: patreon-dl writes each post's
+metadata beside its media. `PatreonLibrary` (patreon_source.py) parses the tree
+on open and answers `SourceDatabase`'s questions, so the whole of sync.py stays
+site-agnostic rather than growing a second pipeline for a source that differs
+only in where metadata lives. A "library" is therefore a *creator folder* here,
+not a file — which is why `SourceProfile.reader` exists and the discovery loop
+asks the profile what to open.
+
+- **Creators are identified by content** (a folder containing `posts/` or
+  `collections/`), because patreon-dl leaves `logs/`, `.patreon-dl/` and a
+  `patreon-dl.conf.bak` beside the real ones and a name-shaped heuristic would
+  make a performer out of `logs`. It also handles a bare-vanity folder with no
+  ` - Name` suffix.
+- **`EXCLUDED_DIRS` is load-bearing, not cosmetic.** `post_info/`,
+  `.thumbnails/`, `image_previews/` and `embed/` hold real image files
+  (`cover-image.jpg`, `thumbnail.jpg`, a byte-identical duplicate of the cover).
+  A real library's download log counts ~1130 `post_info` and ~1080
+  `.thumbnails` jpgs against ~1072 genuine ones — and since the post id is
+  parsed from the *path* and the post folder is their ancestor, every one would
+  otherwise match its post and take its metadata and `organized` flag. Don't
+  "simplify" this away.
+- **Video has no folder of its own** — `.mp4` sits in `images/` and
+  `attachments/` next to the pictures (85 and 65 in that same log), alongside
+  `.psd`/`.zip`/`.pdf` Stash won't ingest. The media index is therefore
+  deliberately **not** an extension allow-list: indexing a file Stash never
+  matches costs nothing, missing one it has loses the credit.
+- **Titles are authored**, hence `real_titles`: used as written, with the body
+  kept whole as details. Title Exclusions still apply.
+- **Collections → one flat gallery each** (`sync_collection_galleries`), holding
+  member posts' images and linking their scenes. Stash has no nested galleries
+  and no gallery→group link, so a gallery *of* galleries is impossible; Groups
+  were rejected because they take scenes only and the library is ~1342 images to
+  ~51 videos. Keyed by collection **URL**, not title, so a rename updates rather
+  than duplicating. `collections()` joins `hashtags`/`tier`/`is_pinned` as a
+  capability that degrades to empty on the scraper-backed sources.
 
 ## Hard constraints — keep these intact
 

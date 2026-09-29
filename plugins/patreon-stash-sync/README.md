@@ -1,5 +1,29 @@
 # Patreon Metadata Sync (Stash plugin)
 
+> ## ⚠️ Deprecated — superseded by Fan Site Metadata Sync
+>
+> Patreon is now synced by **Fan Site Metadata Sync** (`of-stash-sync`)
+> alongside OnlyFans and JustFor.Fans, from the same Sync and Full Sync tasks,
+> plus a **Sync Patreon Only** task.
+>
+> This plugin is kept for one release as a fallback and **will be removed**.
+> Don't run both: set *Patreon Data Path* on the other plugin, run its tasks,
+> and once you're happy, uninstall this one.
+>
+> **Two bugs are fixed only in the replacement**, so this version is not the one
+> to keep using:
+>
+> - It writes post metadata (and `organized`) onto galleries built from
+>   `post_info/` and `.thumbnails/`, which hold cover images and thumbnail
+>   duplicates rather than post media — roughly two junk images for every real
+>   one. The replacement ignores those folders.
+> - It never syncs **video**. patreon-dl puts `.mp4` in `images/` and
+>   `attachments/`, and this plugin only queries galleries and images, so
+>   Patreon scenes were silently skipped.
+>
+> Collection galleries are also matched by URL rather than title there, so
+> renaming a collection updates the gallery instead of creating a second one.
+
 A native [Stash](https://stashapp.cc) plugin that syncs **Patreon** post metadata
 onto the media you downloaded with
 [**patreon-dl**](https://github.com/patrickkfkan/patreon-dl).

@@ -646,12 +646,10 @@ def build_update(db, processor, profile, media_row, creator_ids, studio_id,
         creator_sponsor,
     )
 
-    if text:
-        title, details = processor.process_text(text)
-    else:
-        api_type = media_row["api_type"]
-        title = "{}: {}".format(api_type, date) if api_type else date
-        details = ""
+    api_type = media_row["api_type"]
+    title, details = source.title(
+        processor, meta, text, "{}: {}".format(api_type, date) if api_type else date
+    )
 
     # Build the performer list: the creator (unless they are crew or a sponsor)
     # plus any credited accounts that are neither. If everyone credited turned
@@ -724,12 +722,10 @@ def _gallery_meta(db, processor, profile, post_id, group, performers, tags,
     meta = db.post_meta(post_id)
     text = meta["text"] if (meta and meta["text"]) else ""
 
-    if text:
-        title, details = processor.process_text(text)
-    else:
-        api_type = group.get("api_type")
-        title = "{}: {}".format(api_type, date) if api_type else date
-        details = ""
+    api_type = group.get("api_type")
+    title, details = source.title(
+        processor, meta, text, "{}: {}".format(api_type, date) if api_type else date
+    )
 
     # On galleries, crew are KEPT as linked performers. Stash's director/
     # photographer fields are free text with no link back to a performer, so
@@ -796,25 +792,14 @@ def _gallery_meta(db, processor, profile, post_id, group, performers, tags,
     return gallery_input, title, sponsor_ids
 
 
-def build_post_galleries(client, db, profile, processor, performers, tags,
-                         tag_matcher, studio_id, creator_ids, creator_roles,
-                         creator_name, full_sync, keep_manual_edits, workers,
-                         all_scenes, all_images, totals, source,
-                         creator_sponsor=False):
-    """Group a creator's media by post and make one gallery per post.
+def group_media_by_post(db, user_id, all_scenes, all_images):
+    """post id -> {"images": [stash ids], "scenes": [...], posted_at, api_type}.
 
-    A gallery is created when a post has 2+ images, or an image alongside a video
-    (Stash relates scenes to galleries, not to images, so the gallery carries the
-    scene link). Galleries are keyed by the post URL: a plain sync creates missing
-    ones and adds images; a full sync also refreshes their metadata.
-
-    ``all_scenes``/``all_images`` are the creator's media already fetched by
-    process_profile (organized included), reused here instead of re-querying.
+    Organized media is included deliberately: a gallery should hold all of a
+    post's media regardless of the sync/full mode, and collections group whole
+    posts the same way.
     """
-    user_id = profile["user_id"]
-
-    # filename -> (kind, stash id), organized media included, so a gallery holds
-    # all of a post's media regardless of the sync/full mode.
+    # filename -> (kind, stash id)
     index = {}
     for scene in all_scenes:
         for f in scene.get("files") or []:
@@ -842,6 +827,119 @@ def build_post_galleries(client, db, profile, processor, performers, tags,
         bucket = g["images"] if kind == "image" else g["scenes"]
         if stash_id not in bucket:
             bucket.append(stash_id)
+    return groups
+
+
+def sync_collection_galleries(client, db, profile, processor, studios, performers,
+                              tags, studio_id, creator_ids, full_sync, workers,
+                              all_scenes, all_images, totals, source):
+    """One Stash gallery per creator-curated collection.
+
+    Stash has no nested galleries and no gallery-to-group link, so a collection
+    cannot be "a gallery of galleries". It is flattened instead: the collection
+    gallery holds every member post's images and links every member post's
+    scenes, which is the whole of the collection's media in the one place Stash
+    will accept it.
+
+    Keyed by the collection URL rather than its title -- a creator can rename a
+    collection, and matching on the title would then create a second gallery
+    beside the first. Same rule the per-post galleries use.
+    """
+    collections = db.collections()
+    if not collections:
+        return
+
+    groups = group_media_by_post(db, profile["user_id"], all_scenes, all_images)
+    by_url = {}
+    if studio_id:
+        for gal in client.find_galleries_for_studio(studio_id):
+            for u in gal.get("urls") or []:
+                by_url[u] = gal
+
+    site_tag_id = tags.resolve(source.site_tag) if tags else None
+    tasks = []
+    for coll in collections:
+        url = coll["url"]
+        title = coll["title"] or "Collection {}".format(coll["collection_id"])
+        image_ids, scene_ids = [], []
+        for post_id in coll["post_ids"]:
+            group = groups.get(str(post_id))
+            if not group:
+                continue
+            for image_id in group["images"]:
+                if image_id not in image_ids:
+                    image_ids.append(image_id)
+            for scene_id in group["scenes"]:
+                if scene_id not in scene_ids:
+                    scene_ids.append(scene_id)
+        # A collection whose posts aren't in Stash yet would otherwise create an
+        # empty gallery that never fills in; skip until its media exists.
+        if not image_ids and not scene_ids:
+            log.LogDebug("Collection '{}': no synced media yet, skipping".format(title))
+            continue
+
+        gallery_input = {
+            "title": title,
+            "code": str(coll["collection_id"]),
+            "details": processor.remove_html_tags(coll["description"] or ""),
+            "studio_id": studio_id,
+            "performer_ids": list(creator_ids),
+            "tag_ids": [site_tag_id] if site_tag_id else [],
+            "urls": [url],
+            "organized": True,
+        }
+        date = processor.format_date(coll["date"])
+        if date:
+            gallery_input["date"] = date
+        if scene_ids:
+            gallery_input["scene_ids"] = scene_ids
+
+        existing = by_url.get(url)
+        if existing:
+            # A plain sync only fills in missing images; a full sync also
+            # refreshes the metadata, matching how post galleries behave.
+            update = dict(gallery_input, id=existing["id"]) if full_sync else None
+
+            def _update(u=update, gid=existing["id"], imgs=list(image_ids), t=title):
+                if u is not None:
+                    client.update_gallery(u)
+                if imgs:
+                    client.add_gallery_images(gid, imgs)
+                return {"galleries": 1}
+            tasks.append(_update)
+        else:
+            def _create(gi=dict(gallery_input), imgs=list(image_ids), t=title):
+                gallery_id = client.create_gallery(gi)
+                if not gallery_id:
+                    return {}
+                if imgs:
+                    client.add_gallery_images(gallery_id, imgs)
+                log.LogInfo("Created collection gallery '{}' ({} image(s), {} scene(s))".format(
+                    t, len(imgs), len(gi.get("scene_ids") or [])))
+                return {"galleries": 1}
+            tasks.append(_create)
+
+    if tasks:
+        run_writes(tasks, workers, totals)
+
+
+def build_post_galleries(client, db, profile, processor, performers, tags,
+                         tag_matcher, studio_id, creator_ids, creator_roles,
+                         creator_name, full_sync, keep_manual_edits, workers,
+                         all_scenes, all_images, totals, source,
+                         creator_sponsor=False):
+    """Group a creator's media by post and make one gallery per post.
+
+    A gallery is created when a post has 2+ images, or an image alongside a video
+    (Stash relates scenes to galleries, not to images, so the gallery carries the
+    scene link). Galleries are keyed by the post URL: a plain sync creates missing
+    ones and adds images; a full sync also refreshes their metadata.
+
+    ``all_scenes``/``all_images`` are the creator's media already fetched by
+    process_profile (organized included), reused here instead of re-querying.
+    """
+    user_id = profile["user_id"]
+    groups = group_media_by_post(db, user_id, all_scenes, all_images)
 
     # Existing per-post galleries for this creator's studio, keyed by url.
     by_url = {}
@@ -1234,6 +1332,13 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
             keep_manual_edits, workers, all_scenes, all_images, totals, source,
             creator_sponsor,
         )
+        # Creator-curated collections (Patreon only; every other source returns
+        # none), flattened into one gallery each.
+        sync_collection_galleries(
+            client, db, profile, processor, studios, performers, tags, studio_id,
+            performer_ids, full_sync, workers, all_scenes, all_images, totals,
+            source,
+        )
         # Stash's own folder galleries (one per scanned image folder) arrive with
         # no performer, studio or real title -- adopt them too.
         sync_folder_galleries(
@@ -1260,7 +1365,11 @@ def main():
     tag_only = mode == "tag"
     crew_only = mode == "crew"
 
-    client = StashClient(server)
+    # Dry run comes from either the task ("Preview") or the setting, so a one-off
+    # preview never needs the setting toggled and back. The plugin config is read
+    # through this same client, so the arg has to be honoured before that read
+    # and the setting folded in immediately after.
+    client = StashClient(server, dry_run=bool(args.get("dryRun")))
     # Adopt the non-expiring API key up front. A full sync can run long enough to
     # outlive Stash's session cookie, which then 401s every remaining request
     # (whole creators fail near the end of the run). The API key avoids that; if
@@ -1283,11 +1392,28 @@ def main():
         log.LogError(msg)
         return msg
 
+    # Optional per-site scoping: the manifest's "Sync <Site>" tasks pass
+    # {"site": "<slug>"} so one site can be re-synced without walking the
+    # others' libraries. An unknown slug is fatal rather than ignored -- falling
+    # back to every site is the opposite of what a per-site task was asked for.
+    site = str(args.get("site") or "").strip().lower()
+    scoped_source = None
+    if site:
+        scoped_source = sources.profile_for_slug(site)
+        if scoped_source is None:
+            msg = "Unknown site '{}'. Known sites: {}.".format(
+                site, ", ".join(sources.slugs())
+            )
+            log.LogError(msg)
+            return msg
+
     # Each site has its own data path and parent studio; everything else is
     # shared. A site with no path configured is simply not scanned, so an
     # OnlyFans-only setup behaves exactly as it did before other sites existed.
     configured_sources = []
     for source in sources.ALL_PROFILES:
+        if scoped_source is not None and source is not scoped_source:
+            continue
         path = str(get_setting(config, source.path_setting, "") or "").strip()
         if not path:
             continue
@@ -1303,6 +1429,12 @@ def main():
     auto_create = bool(get_setting(config, "autoCreatePerformers", False))
     auto_tag_from_text = bool(get_setting(config, "autoTagFromText", False))
     skip_multi_file = bool(get_setting(config, "skipMultiFile", False))
+    if not client.dry_run and bool(get_setting(config, "dryRun", False)):
+        client.dry_run = True
+    if client.dry_run:
+        log.LogInfo(
+            "DRY RUN: every change is logged and nothing is written to Stash."
+        )
     crew_tag_id = get_setting(config, "crewTagId", "")
     sponsor_tag_id = get_setting(config, "sponsorTagId", "")
     keep_manual_edits = bool(get_setting(config, "keepManualEdits", False))
@@ -1314,12 +1446,20 @@ def main():
     workers = max(1, min(workers, 16))  # clamp: 1 = sequential, cap concurrency
 
     if not configured_sources:
-        msg = (
-            "No data path configured. Set at least one of {} in the plugin "
-            "settings.".format(
-                " / ".join("'{}'".format(s.path_setting) for s in sources.ALL_PROFILES)
+        if scoped_source is not None:
+            msg = (
+                "No data path configured for {}. Set '{}' in the plugin settings, "
+                "or use a task that isn't scoped to one site.".format(
+                    scoped_source.label, scoped_source.path_setting
+                )
             )
-        )
+        else:
+            msg = (
+                "No data path configured. Set at least one of {} in the plugin "
+                "settings.".format(
+                    " / ".join("'{}'".format(s.path_setting) for s in sources.ALL_PROFILES)
+                )
+            )
         log.LogError(msg)
         return msg
 
@@ -1356,8 +1496,9 @@ def main():
                  "crew/sponsor credit pass" if crew_only else
                  "scoped performer re-sync" if performer_scope else
                  "{}metadata sync".format("FULL " if full_sync else ""))
-    log.LogInfo("Starting {} for: {}".format(
+    log.LogInfo("Starting {}{} for: {}".format(
         pass_name,
+        " scoped to {}".format(scoped_source.label) if scoped_source else "",
         ", ".join("{} ({})".format(src.label, path) for src, path in configured_sources)))
 
     # The parent studio is only needed by the passes that create studios, and it
@@ -1375,21 +1516,27 @@ def main():
                 return msg
             source.icon = load_icon(server, source.icon_file)
 
-    # Discover every database once, remembering which path found it, so a db is
-    # never scanned twice when two sites share a parent directory.
+    # Discover every library once, remembering the site whose path found it, so
+    # one is never scanned twice when two sites share a parent directory.
+    #
+    # What a "library" is differs per site: for the scraper-backed sites it's a
+    # user_data.db file, for Patreon it's a creator's folder (no database
+    # exists). Each site's reader knows how to find its own, so this stays one
+    # loop rather than branching per site.
     databases = []
     seen_paths = set()
     for source, path in configured_sources:
-        found = SourceDatabase.find_databases(path)
+        found = source.reader.find_databases(path)
         for db_path in found:
             if db_path in seen_paths:
                 continue
             seen_paths.add(db_path)
-            databases.append(db_path)
+            databases.append((source, db_path))
         if not found:
-            log.LogWarning("No user_data.db files found under {}".format(path))
-    log.LogInfo("Found {} user_data.db file(s){}".format(
-        len(databases), "" if workers <= 1 else " ({} parallel writers)".format(workers)))
+            log.LogWarning("No {} library found under {}".format(source.label, path))
+    log.LogInfo("Found {} librar{}{}".format(
+        len(databases), "y" if len(databases) == 1 else "ies",
+        "" if workers <= 1 else " ({} parallel writers)".format(workers)))
     if not databases:
         return
 
@@ -1416,17 +1563,28 @@ def main():
         )
     totals = {"scenes": 0, "images": 0, "galleries": 0, "skipped": 0, "skipped_multifile": 0}
 
-    for index, db_path in enumerate(databases):
+    for index, (found_by, db_path) in enumerate(databases):
         log.LogProgress(index / len(databases))
         try:
-            db = SourceDatabase(db_path)
+            db = found_by.reader(db_path)
         except Exception as e:
             log.LogError("Could not open {}: {}".format(db_path, e))
             continue
-        # Which site this database came from is read from the database itself
-        # (its schema_flags source), not from a setting -- so a data path holding
-        # more than one kind of library sorts itself out.
+        # Which site this library came from is read from the library itself
+        # (the scrapers' schema_flags source; "patreon" from the adapter), not
+        # from the path it was found under -- so a data path holding more than
+        # one kind of library sorts itself out.
         source = sources.profile_for_source(db.source())
+        # A per-site task must honour the site the DATABASE says it is, not the
+        # path it was found under: the two sites can share a parent directory,
+        # and 'user_data.db' is both scrapers' filename. Without this, "Sync
+        # OnlyFans" would happily sync a JustFor.Fans library sitting under the
+        # OnlyFans path.
+        if scoped_source is not None and source is not scoped_source:
+            log.LogDebug("Skipping {} ({} database, not {})".format(
+                db_path, source.label, scoped_source.label))
+            db.close()
+            continue
         # Only used for the URL on a performer this run creates.
         performers.source = source
         try:

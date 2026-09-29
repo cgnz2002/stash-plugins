@@ -1,6 +1,6 @@
-name: Fan Site Metadata Sync (OnlyFans + JustFor.Fans)
-description: Sync scraped metadata (title, details, date, post URL, performers, studio, tags) from OF-Scraper and jff-scraper user_data.db files into matching Stash scenes and images, group each post's media into a gallery, and adopt the galleries Stash makes from scanned image folders. Each database's site is detected from the database itself.
-version: 2.1.2
+name: Fan Site Metadata Sync (OnlyFans + JustFor.Fans + Patreon)
+description: Sync scraped metadata (title, details, date, post URL, performers, studio, tags) from OF-Scraper and jff-scraper user_data.db files, and from patreon-dl's on-disk post files, into matching Stash scenes and images, group each post's media into a gallery, and adopt the galleries Stash makes from scanned image folders. Each database's site is detected from the database itself.
+version: 2.3.0
 url: https://github.com/cgnz2002/stash-plugins
 
 settings:
@@ -19,6 +19,14 @@ settings:
   jffParentStudioName:
     displayName: JustFor.Fans Parent Studio
     description: "Name of the top-level JustFor.Fans studio. Per-creator studios are created beneath it. It must already exist in Stash. Default: JustForFans (network)"
+    type: STRING
+  patreonDataPath:
+    displayName: Patreon Data Path
+    description: "Directory (as seen inside the Stash container, e.g. /data/patreon - NOT the NAS path) that patreon-dl downloads into. Each '<vanity> - <Creator Name>' folder beneath it is one creator. Leave blank if you have no Patreon library. Unlike the other sites there is no database: the post metadata is read from each post's post_info files."
+    type: STRING
+  patreonParentStudioName:
+    displayName: Patreon Parent Studio
+    description: "Name of the top-level Patreon studio. Per-creator studios are created beneath it. It must already exist in Stash. Default: Patreon (network)"
     type: STRING
   maxTitleLength:
     displayName: Max Title Length
@@ -52,6 +60,10 @@ settings:
     displayName: Title Exclusions
     description: "Phrases or regular expressions to strip from generated scene/image/gallery TITLES. The details/description field is left untouched (it keeps the original post text). Each entry is matched case-insensitively anywhere in the title and removed, then leftover separators are tidied -- e.g. an entry 'new collab:' turns the title 'New collab: Beach day' into 'Beach day' while the description stays as written. Best edited with the list editor: Settings > Tools > 'Fan Site Sync: Title Exclusions' (add/remove rows, then Save). This field is a fallback -- you can also type one pattern here or paste a JSON array."
     type: STRING
+  dryRun:
+    displayName: Dry Run
+    description: "When on, every task logs the changes it would make - each scene/image/gallery it would update, each studio/performer/tag/gallery it would create - without writing anything to Stash. Reads still happen, so the preview reflects your real library. The 'Preview (Dry Run)' task forces this on for a single run regardless of this setting. Default off."
+    type: BOOLEAN
   crewTagId:
     displayName: Crew Tag ID
     description: "The Stash tag ID that marks crew performers (directors/photographers). Find it in the tag's page URL, e.g. .../tags/42 means the ID is 42. Any performer with this tag -- the creator or a collaborator credited by @mention or profile URL (onlyfans.com/username or justfor.fans/username) -- is credited in each scene's Director field and each image's Photographer field instead of the performers list; the studio still follows the media's source, and if a post's only credits are crew the creator is added as a performer so nothing is left empty. Leave empty to disable crew handling."
@@ -89,6 +101,26 @@ tasks:
     description: Re-apply only the crew and sponsor logic to ALL synced scenes and images - move director/photographer-tagged people into the director/photographer field, and drop sponsor-tagged accounts from the performers list in favour of a 'sponsored' tag. Leaves titles, dates, studios and everything else untouched (the only tag change is adding 'sponsored'). Use after tagging new performers as crew or sponsors, to avoid a full re-sync.
     defaultArgs:
       mode: crew
+  - name: Sync OnlyFans Only
+    description: Same as Sync Metadata, but only scans the OnlyFans data path - faster when you just added OnlyFans content and don't want the other sites walked. Databases under that path that identify as another site are skipped.
+    defaultArgs:
+      mode: sync
+      site: onlyfans
+  - name: Sync JustFor.Fans Only
+    description: Same as Sync Metadata, but only scans the JustFor.Fans data path - faster when you just added JustFor.Fans content and don't want the other sites walked. Databases under that path that identify as another site are skipped.
+    defaultArgs:
+      mode: sync
+      site: justforfans
+  - name: Sync Patreon Only
+    description: Same as Sync Metadata, but only scans the Patreon data path - faster when you just added Patreon content and don't want the other sites walked.
+    defaultArgs:
+      mode: sync
+      site: patreon
+  - name: Preview (Dry Run)
+    description: Preview a FULL sync in the log without writing anything to Stash - every scene, image and gallery it would update, and every studio, performer, tag and gallery it would create. Safe to run first, and the sensible thing to do before a site's first sync.
+    defaultArgs:
+      mode: full
+      dryRun: true
   - name: Sync Performer
     description: Full re-sync of a SINGLE performer, across every configured site. Triggered by the "Sync Fan Sites" button on a performer's page (it passes the performer id); running it here without one does nothing.
     defaultArgs:

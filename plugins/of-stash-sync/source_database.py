@@ -221,5 +221,11 @@ class SourceDatabase:
         row = self._jff_row(post_id)
         return bool(row["pinned"]) if row else False
 
+    def collections(self):
+        """Creator-curated groupings of posts. A Patreon-only concept -- the
+        scrapers have nothing equivalent -- so this degrades to empty here, the
+        same way hashtags/tier/pinned do on an OF-Scraper database."""
+        return []
+
     def close(self):
         self.conn.close()

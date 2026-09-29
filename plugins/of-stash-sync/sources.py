@@ -13,14 +13,22 @@ JustFor.Fans support was folded in, field for field -- that is deliberate, so
 merging the two plugins cannot change what an existing OnlyFans library syncs to.
 """
 
+import patreon_source
+import source_database
+
 
 class SourceProfile:
-    def __init__(self, key, label, site_tag, studio_suffix, parent_setting,
+    def __init__(self, key, slug, label, site_tag, studio_suffix, parent_setting,
                  parent_default, path_setting, icon_file, profile_url,
-                 post_url, media_code, link_domain):
+                 post_url, media_code, link_domain, reader=None,
+                 real_titles=False):
         # Value of schema_flags.source that selects this profile (None = the
         # OnlyFans default, since OF-Scraper databases carry no such flag).
         self.key = key
+        # Stable identifier for the manifest's per-site tasks ({"site": slug}).
+        # Separate from `key` because that one is None for OnlyFans, which is
+        # fine as a database flag but useless as a task argument.
+        self.slug = slug
         self.label = label                  # human name, used in log lines
         self.site_tag = site_tag            # tag put on every synced item
         self.studio_suffix = studio_suffix  # per-creator studio "<user> (<suffix>)"
@@ -29,6 +37,14 @@ class SourceProfile:
         self.path_setting = path_setting    # settings key for this site's data path
         self.icon_file = icon_file          # studio image shipped with the plugin
         self.link_domain = link_domain      # profile links that credit a collaborator
+        # What opens one library for this site. The scraper-backed sites share
+        # SourceDatabase (sqlite); Patreon has no database and uses an adapter
+        # over its on-disk tree. Both answer the same questions, so sync.py
+        # never needs to know which it got. Set after the classes are imported.
+        self.reader = reader
+        # Whether the site's posts carry an authored title (Patreon) rather than
+        # one that has to be derived from the post text (OnlyFans/JustFor.Fans).
+        self.real_titles = real_titles
         self._profile_url = profile_url
         self._post_url = post_url
         self._media_code = media_code
@@ -48,6 +64,25 @@ class SourceProfile:
 
     def studio_name(self, username):
         return "{} ({})".format(username, self.studio_suffix)
+
+    def title(self, processor, meta, text, fallback):
+        """Title and details for a post.
+
+        OnlyFans and JustFor.Fans have no title field, so one is derived from
+        the post text (and Title Exclusions strip the boilerplate). Patreon
+        posts carry a real, authored title, so sites that have one say so with
+        `real_titles` and it is used as written, with the body kept whole as
+        the details instead of being split out of it.
+        """
+        if self.real_titles and meta:
+            title = (meta["title"] or "").strip()
+            if title:
+                # Exclusions still apply: a creator who prefixes every Patreon
+                # title with boilerplate has the same problem either way.
+                return processor.apply_title_exclusions(title), text
+        if text:
+            return processor.process_text(text)
+        return fallback, ""
 
     def is_paid(self, db, post_id, meta):
         """Whether the post counts as paid.
@@ -110,6 +145,7 @@ def _jff_media_code(processor, media_row, post_id):
 
 ONLYFANS = SourceProfile(
     key=None,
+    slug="onlyfans",
     label="OnlyFans",
     site_tag="OnlyFans",
     studio_suffix="OnlyFans",
@@ -125,6 +161,7 @@ ONLYFANS = SourceProfile(
 
 JUSTFORFANS = SourceProfile(
     key="jff",
+    slug="justforfans",
     label="JustFor.Fans",
     site_tag="JustFor.Fans",
     studio_suffix="JustForFans",
@@ -138,9 +175,63 @@ JUSTFORFANS = SourceProfile(
     link_domain="justfor.fans",
 )
 
-ALL_PROFILES = [ONLYFANS, JUSTFORFANS]
+def _patreon_profile_url(username):
+    return "https://www.patreon.com/{}".format(username)
+
+
+def _patreon_post_url(db, post_id, username):
+    """patreon.com/posts/<id> is rebuildable, but the adapter already holds the
+    real URL captured from the post (which carries the slug), so prefer that."""
+    return db.post_url(post_id) or "https://www.patreon.com/posts/{}".format(post_id)
+
+
+def _patreon_media_code(processor, media_row, post_id):
+    """patreon-dl names files after the media, not the post, and video carries a
+    '<mediaId>-<title>' prefix -- so as with JustFor.Fans the post id is the
+    identifier that ties a scene back to its post folder and its gallery."""
+    return str(post_id)
+
+
+PATREON = SourceProfile(
+    key="patreon",
+    slug="patreon",
+    label="Patreon",
+    site_tag="Patreon",
+    studio_suffix="Patreon",
+    parent_setting="patreonParentStudioName",
+    parent_default="Patreon (network)",
+    path_setting="patreonDataPath",
+    icon_file="patreon.png",
+    profile_url=_patreon_profile_url,
+    post_url=_patreon_post_url,
+    media_code=_patreon_media_code,
+    link_domain="patreon.com",
+    real_titles=True,
+)
+
+ALL_PROFILES = [ONLYFANS, JUSTFORFANS, PATREON]
+
+# Wired here rather than at construction so the profiles above stay pure data.
+# The scraper-backed sites share one sqlite reader; Patreon has no database at
+# all, so its adapter reads the creator's on-disk tree and answers the same
+# questions. sync.py opens `source.reader(path)` without caring which it is.
+ONLYFANS.reader = source_database.SourceDatabase
+JUSTFORFANS.reader = source_database.SourceDatabase
+PATREON.reader = patreon_source.PatreonLibrary
 _BY_KEY = {p.key: p for p in ALL_PROFILES}
 _BY_DOMAIN = {p.link_domain: p for p in ALL_PROFILES}
+_BY_SLUG = {p.slug: p for p in ALL_PROFILES}
+
+
+def profile_for_slug(slug):
+    """Profile named by a per-site task's ``site`` argument, or None if the slug
+    isn't one we know (the caller reports that rather than silently syncing
+    everything, which is the opposite of what a per-site task was asked to do)."""
+    return _BY_SLUG.get(str(slug).strip().lower()) if slug else None
+
+
+def slugs():
+    return [p.slug for p in ALL_PROFILES]
 
 
 def profile_for_source(source):
