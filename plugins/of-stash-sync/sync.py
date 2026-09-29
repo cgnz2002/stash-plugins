@@ -792,25 +792,14 @@ def _gallery_meta(db, processor, profile, post_id, group, performers, tags,
     return gallery_input, title, sponsor_ids
 
 
-def build_post_galleries(client, db, profile, processor, performers, tags,
-                         tag_matcher, studio_id, creator_ids, creator_roles,
-                         creator_name, full_sync, keep_manual_edits, workers,
-                         all_scenes, all_images, totals, source,
-                         creator_sponsor=False):
-    """Group a creator's media by post and make one gallery per post.
+def group_media_by_post(db, user_id, all_scenes, all_images):
+    """post id -> {"images": [stash ids], "scenes": [...], posted_at, api_type}.
 
-    A gallery is created when a post has 2+ images, or an image alongside a video
-    (Stash relates scenes to galleries, not to images, so the gallery carries the
-    scene link). Galleries are keyed by the post URL: a plain sync creates missing
-    ones and adds images; a full sync also refreshes their metadata.
-
-    ``all_scenes``/``all_images`` are the creator's media already fetched by
-    process_profile (organized included), reused here instead of re-querying.
+    Organized media is included deliberately: a gallery should hold all of a
+    post's media regardless of the sync/full mode, and collections group whole
+    posts the same way.
     """
-    user_id = profile["user_id"]
-
-    # filename -> (kind, stash id), organized media included, so a gallery holds
-    # all of a post's media regardless of the sync/full mode.
+    # filename -> (kind, stash id)
     index = {}
     for scene in all_scenes:
         for f in scene.get("files") or []:
@@ -838,6 +827,119 @@ def build_post_galleries(client, db, profile, processor, performers, tags,
         bucket = g["images"] if kind == "image" else g["scenes"]
         if stash_id not in bucket:
             bucket.append(stash_id)
+    return groups
+
+
+def sync_collection_galleries(client, db, profile, processor, studios, performers,
+                              tags, studio_id, creator_ids, full_sync, workers,
+                              all_scenes, all_images, totals, source):
+    """One Stash gallery per creator-curated collection.
+
+    Stash has no nested galleries and no gallery-to-group link, so a collection
+    cannot be "a gallery of galleries". It is flattened instead: the collection
+    gallery holds every member post's images and links every member post's
+    scenes, which is the whole of the collection's media in the one place Stash
+    will accept it.
+
+    Keyed by the collection URL rather than its title -- a creator can rename a
+    collection, and matching on the title would then create a second gallery
+    beside the first. Same rule the per-post galleries use.
+    """
+    collections = db.collections()
+    if not collections:
+        return
+
+    groups = group_media_by_post(db, profile["user_id"], all_scenes, all_images)
+    by_url = {}
+    if studio_id:
+        for gal in client.find_galleries_for_studio(studio_id):
+            for u in gal.get("urls") or []:
+                by_url[u] = gal
+
+    site_tag_id = tags.resolve(source.site_tag) if tags else None
+    tasks = []
+    for coll in collections:
+        url = coll["url"]
+        title = coll["title"] or "Collection {}".format(coll["collection_id"])
+        image_ids, scene_ids = [], []
+        for post_id in coll["post_ids"]:
+            group = groups.get(str(post_id))
+            if not group:
+                continue
+            for image_id in group["images"]:
+                if image_id not in image_ids:
+                    image_ids.append(image_id)
+            for scene_id in group["scenes"]:
+                if scene_id not in scene_ids:
+                    scene_ids.append(scene_id)
+        # A collection whose posts aren't in Stash yet would otherwise create an
+        # empty gallery that never fills in; skip until its media exists.
+        if not image_ids and not scene_ids:
+            log.LogDebug("Collection '{}': no synced media yet, skipping".format(title))
+            continue
+
+        gallery_input = {
+            "title": title,
+            "code": str(coll["collection_id"]),
+            "details": processor.remove_html_tags(coll["description"] or ""),
+            "studio_id": studio_id,
+            "performer_ids": list(creator_ids),
+            "tag_ids": [site_tag_id] if site_tag_id else [],
+            "urls": [url],
+            "organized": True,
+        }
+        date = processor.format_date(coll["date"])
+        if date:
+            gallery_input["date"] = date
+        if scene_ids:
+            gallery_input["scene_ids"] = scene_ids
+
+        existing = by_url.get(url)
+        if existing:
+            # A plain sync only fills in missing images; a full sync also
+            # refreshes the metadata, matching how post galleries behave.
+            update = dict(gallery_input, id=existing["id"]) if full_sync else None
+
+            def _update(u=update, gid=existing["id"], imgs=list(image_ids), t=title):
+                if u is not None:
+                    client.update_gallery(u)
+                if imgs:
+                    client.add_gallery_images(gid, imgs)
+                return {"galleries": 1}
+            tasks.append(_update)
+        else:
+            def _create(gi=dict(gallery_input), imgs=list(image_ids), t=title):
+                gallery_id = client.create_gallery(gi)
+                if not gallery_id:
+                    return {}
+                if imgs:
+                    client.add_gallery_images(gallery_id, imgs)
+                log.LogInfo("Created collection gallery '{}' ({} image(s), {} scene(s))".format(
+                    t, len(imgs), len(gi.get("scene_ids") or [])))
+                return {"galleries": 1}
+            tasks.append(_create)
+
+    if tasks:
+        run_writes(tasks, workers, totals)
+
+
+def build_post_galleries(client, db, profile, processor, performers, tags,
+                         tag_matcher, studio_id, creator_ids, creator_roles,
+                         creator_name, full_sync, keep_manual_edits, workers,
+                         all_scenes, all_images, totals, source,
+                         creator_sponsor=False):
+    """Group a creator's media by post and make one gallery per post.
+
+    A gallery is created when a post has 2+ images, or an image alongside a video
+    (Stash relates scenes to galleries, not to images, so the gallery carries the
+    scene link). Galleries are keyed by the post URL: a plain sync creates missing
+    ones and adds images; a full sync also refreshes their metadata.
+
+    ``all_scenes``/``all_images`` are the creator's media already fetched by
+    process_profile (organized included), reused here instead of re-querying.
+    """
+    user_id = profile["user_id"]
+    groups = group_media_by_post(db, user_id, all_scenes, all_images)
 
     # Existing per-post galleries for this creator's studio, keyed by url.
     by_url = {}
@@ -1229,6 +1331,13 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
             studio_id, performer_ids, creator_roles, creator_name, full_sync,
             keep_manual_edits, workers, all_scenes, all_images, totals, source,
             creator_sponsor,
+        )
+        # Creator-curated collections (Patreon only; every other source returns
+        # none), flattened into one gallery each.
+        sync_collection_galleries(
+            client, db, profile, processor, studios, performers, tags, studio_id,
+            performer_ids, full_sync, workers, all_scenes, all_images, totals,
+            source,
         )
         # Stash's own folder galleries (one per scanned image folder) arrive with
         # no performer, studio or real title -- adopt them too.

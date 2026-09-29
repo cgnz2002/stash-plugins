@@ -490,5 +490,26 @@ class PatreonLibrary:
     def is_pinned(self, post_id):
         return False
 
+    def collections(self):
+        """The creator's collections, each naming the posts it groups.
+
+        Patreon's own series structure ("Moano & Ariel", "Hercules & Aladdin"),
+        which is real curation rather than incidental metadata -- so it is worth
+        carrying into Stash even though Stash has no nested-gallery concept to
+        map it onto exactly.
+        """
+        root = os.path.join(self.path, "collections")
+        if not os.path.isdir(root):
+            return []
+        out, seen = [], set()
+        for json_path in find_collection_json(root):
+            coll = parse_collection(json_path)
+            if coll and coll["collection_id"] not in seen:
+                seen.add(coll["collection_id"])
+                if not coll["vanity"]:
+                    coll["vanity"] = self.vanity
+                out.append(coll)
+        return out
+
     def close(self):
         pass
