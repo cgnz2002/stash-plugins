@@ -15,7 +15,15 @@ import log
 
 # Stands in for a real id during a dry run. Never written anywhere -- it only
 # keeps a create's caller moving so the preview reaches the end of the run.
-DRY_RUN_ID = "dry-run"
+#
+# It MUST look like a real Stash id (a number), not a word. A simulated create
+# hands this id back to the caller, which can then pass it to a *read* -- a new
+# studio's id goes straight into find_galleries_for_studio -- and Stash splices
+# ids into SQL, so "dry-run" came back as `studio_id IN (VALUES(dry-run))` and
+# failed the query with "no such column: dry", killing the whole creator's
+# preview. 0 is a valid id shape that matches nothing, so such a read correctly
+# returns empty: an object that doesn't exist yet has no galleries.
+DRY_RUN_ID = "0"
 
 # The first field of a mutation body ("mutation X($i: T!) { sceneUpdate(...)").
 # Reads are left alone: a dry run must still see the real library to preview
@@ -43,7 +51,10 @@ def _summarize(payload):
     if payload.get("urls"):
         parts.append("url={}".format(payload["urls"][0]))
     if payload.get("studio_id"):
-        parts.append("studio={}".format(payload["studio_id"]))
+        # A studio this run would have created has no real id yet; "(new)" says
+        # that, where a bare 0 would just look like a bug in the preview.
+        parts.append("studio={}".format(
+            "(new)" if payload["studio_id"] == DRY_RUN_ID else payload["studio_id"]))
     for key, label in (("performer_ids", "performers"), ("tag_ids", "tags"),
                        ("scene_ids", "scenes"), ("ids", "images")):
         if key in payload and isinstance(payload[key], list):
