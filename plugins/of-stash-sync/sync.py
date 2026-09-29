@@ -336,7 +336,7 @@ class StudioResolver:
             )
             if studio_id:
                 self._map[name.strip().lower()] = studio_id
-            log.LogInfo("Created studio '{}'".format(name))
+                log.LogInfo("Created studio '{}'".format(name))
         elif source.icon and studio_id in self._no_image:
             # Back-fill the logo onto a studio created before the plugin shipped
             # an icon for this site: Stash only accepts a studio image on create,
@@ -900,10 +900,15 @@ def sync_collection_galleries(client, db, profile, processor, studios, performer
             # refreshes the metadata, matching how post galleries behave.
             update = dict(gallery_input, id=existing["id"]) if full_sync else None
 
-            def _update(u=update, gid=existing["id"], imgs=list(image_ids), t=title):
+            # As in build_post_galleries: Stash rejects addGalleryImages on a
+            # folder-based gallery, so only its metadata is ours to set.
+            attach = not existing.get("folder")
+
+            def _update(u=update, gid=existing["id"], imgs=list(image_ids), t=title,
+                        attach=attach):
                 if u is not None:
                     client.update_gallery(u)
-                if imgs:
+                if imgs and attach:
                     client.add_gallery_images(gid, imgs)
                 return {"galleries": 1}
             tasks.append(_update)
@@ -989,10 +994,18 @@ def build_post_galleries(client, db, profile, processor, performers, tags,
                     gallery_input["tag_ids"] = merged_tags
                 gallery_input["id"] = existing["id"]
 
-            def _update_task(gi=gallery_input, gid=existing["id"], imgs=list(images)):
+            # A folder-based gallery already IS its folder's contents, and Stash
+            # rejects addGalleryImages on one ("cannot change contents of
+            # folder-based gallery"). Its metadata is still ours to set, so
+            # update it and leave the image list alone.
+            attach = not existing.get("folder")
+
+            def _update_task(gi=gallery_input, gid=existing["id"], imgs=list(images),
+                             attach=attach):
                 if gi is not None:
                     client.update_gallery(gi)
-                client.add_gallery_images(gid, imgs)
+                if attach:
+                    client.add_gallery_images(gid, imgs)
                 return {"galleries": 1}
             tasks.append(_update_task)
         else:
@@ -1289,6 +1302,12 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
     for basename, (kind, stash_id, existing_tags, existing_perf, existing_credit) in media_map.items():
         media_row = db.media_by_filename(user_id, basename)
         if not media_row:
+            # Logged so an unexplained "Skipped: n" can be traced to the actual
+            # files: a name Stash has but the source doesn't means the media sits
+            # somewhere the reader isn't looking (an excluded folder, a path
+            # outside the data path), which is otherwise invisible.
+            log.LogDebug(
+                "  No source entry for '{}' -- skipped".format(basename))
             totals["skipped"] += 1
             continue
 

@@ -355,18 +355,36 @@ asks the profile what to open.
   make a performer out of `logs`. It also handles a bare-vanity folder with no
   ` - Name` suffix.
 - **`EXCLUDED_DIRS` is load-bearing, not cosmetic.** `post_info/`,
-  `.thumbnails/`, `image_previews/` and `embed/` hold real image files
+  `.thumbnails/` and `image_previews/` hold real image files
   (`cover-image.jpg`, `thumbnail.jpg`, a byte-identical duplicate of the cover).
   A real library's download log counts ~1130 `post_info` and ~1080
   `.thumbnails` jpgs against ~1072 genuine ones — and since the post id is
   parsed from the *path* and the post folder is their ancestor, every one would
   otherwise match its post and take its metadata and `organized` flag. Don't
   "simplify" this away.
-- **Video has no folder of its own** — `.mp4` sits in `images/` and
-  `attachments/` next to the pictures (85 and 65 in that same log), alongside
+- **`embed/` is NOT in that list, and must not be added back.** It looks
+  auxiliary and was excluded on the assumption that it held only `.txt`
+  descriptors of embedded media; it does not. patreon-dl downloads embedded
+  video into it, so excluding it silently dropped whole scenes — a post whose
+  only video is `<post>/embed/<title>.mp4` synced nothing at all and merely
+  incremented `Skipped`. The three folders above hold duplicates of media that
+  exists elsewhere; `embed/` holds media that exists nowhere else, which is the
+  whole distinction. Its `.txt` descriptors get indexed too, harmlessly: Stash
+  never ingests one, so it can never match a scene or image.
+- **Video has no folder of its own** — `.mp4` sits in `images/`, `attachments/`
+  and `embed/` next to the pictures (85 and 65 in that same log), alongside
   `.psd`/`.zip`/`.pdf` Stash won't ingest. The media index is therefore
   deliberately **not** an extension allow-list: indexing a file Stash never
   matches costs nothing, missing one it has loses the credit.
+- **A folder gallery can turn up as a post's existing gallery.** Per-post and
+  collection galleries are looked up through `find_galleries_for_studio`, keyed
+  by URL — and a gallery Stash made from a scanned folder can carry both the
+  creator's studio and the post URL, because an earlier sync stamped them on.
+  Stash owns such a gallery's contents and rejects `addGalleryImages` on it
+  outright, so both call sites check `existing.get("folder")` and update only
+  its metadata. This is the opposite direction to `find_folder_galleries`,
+  which filters *for* `folder`; the field is the discriminator either way, so
+  the studio query fetches it.
 - **Titles are authored**, hence `real_titles`: used as written, with the body
   kept whole as details. Title Exclusions still apply.
 - **Collections → one flat gallery each** (`sync_collection_galleries`), holding

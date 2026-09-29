@@ -401,11 +401,22 @@ class StashClient:
 
     def find_galleries_for_studio(self, studio_id):
         """Galleries under a creator's studio, with their urls, so per-post
-        galleries can be matched by url without a query per post."""
+        galleries can be matched by url without a query per post.
+
+        `folder` is fetched because a match here is not necessarily one of this
+        plugin's galleries: a folder gallery Stash made from a scanned directory
+        can carry the same studio and url (an earlier sync, or an earlier version
+        of this plugin, stamped them on). Stash refuses addGalleryImages on a
+        folder-based gallery -- its contents are the folder -- so callers must be
+        able to tell the two apart.
+        """
         query = """
         query FindGalleries($f: GalleryFilterType!) {
             findGalleries(gallery_filter: $f, filter: { per_page: -1 }) {
-                galleries { id code urls tags { id } performers { id } }
+                galleries {
+                    id code urls folder { path }
+                    tags { id } performers { id }
+                }
             }
         }
         """
