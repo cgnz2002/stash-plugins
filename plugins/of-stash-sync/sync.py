@@ -646,12 +646,10 @@ def build_update(db, processor, profile, media_row, creator_ids, studio_id,
         creator_sponsor,
     )
 
-    if text:
-        title, details = processor.process_text(text)
-    else:
-        api_type = media_row["api_type"]
-        title = "{}: {}".format(api_type, date) if api_type else date
-        details = ""
+    api_type = media_row["api_type"]
+    title, details = source.title(
+        processor, meta, text, "{}: {}".format(api_type, date) if api_type else date
+    )
 
     # Build the performer list: the creator (unless they are crew or a sponsor)
     # plus any credited accounts that are neither. If everyone credited turned
@@ -724,12 +722,10 @@ def _gallery_meta(db, processor, profile, post_id, group, performers, tags,
     meta = db.post_meta(post_id)
     text = meta["text"] if (meta and meta["text"]) else ""
 
-    if text:
-        title, details = processor.process_text(text)
-    else:
-        api_type = group.get("api_type")
-        title = "{}: {}".format(api_type, date) if api_type else date
-        details = ""
+    api_type = group.get("api_type")
+    title, details = source.title(
+        processor, meta, text, "{}: {}".format(api_type, date) if api_type else date
+    )
 
     # On galleries, crew are KEPT as linked performers. Stash's director/
     # photographer fields are free text with no link back to a performer, so
@@ -1401,21 +1397,27 @@ def main():
                 return msg
             source.icon = load_icon(server, source.icon_file)
 
-    # Discover every database once, remembering which path found it, so a db is
-    # never scanned twice when two sites share a parent directory.
+    # Discover every library once, remembering the site whose path found it, so
+    # one is never scanned twice when two sites share a parent directory.
+    #
+    # What a "library" is differs per site: for the scraper-backed sites it's a
+    # user_data.db file, for Patreon it's a creator's folder (no database
+    # exists). Each site's reader knows how to find its own, so this stays one
+    # loop rather than branching per site.
     databases = []
     seen_paths = set()
     for source, path in configured_sources:
-        found = SourceDatabase.find_databases(path)
+        found = source.reader.find_databases(path)
         for db_path in found:
             if db_path in seen_paths:
                 continue
             seen_paths.add(db_path)
-            databases.append(db_path)
+            databases.append((source, db_path))
         if not found:
-            log.LogWarning("No user_data.db files found under {}".format(path))
-    log.LogInfo("Found {} user_data.db file(s){}".format(
-        len(databases), "" if workers <= 1 else " ({} parallel writers)".format(workers)))
+            log.LogWarning("No {} library found under {}".format(source.label, path))
+    log.LogInfo("Found {} librar{}{}".format(
+        len(databases), "y" if len(databases) == 1 else "ies",
+        "" if workers <= 1 else " ({} parallel writers)".format(workers)))
     if not databases:
         return
 
@@ -1442,16 +1444,17 @@ def main():
         )
     totals = {"scenes": 0, "images": 0, "galleries": 0, "skipped": 0, "skipped_multifile": 0}
 
-    for index, db_path in enumerate(databases):
+    for index, (found_by, db_path) in enumerate(databases):
         log.LogProgress(index / len(databases))
         try:
-            db = SourceDatabase(db_path)
+            db = found_by.reader(db_path)
         except Exception as e:
             log.LogError("Could not open {}: {}".format(db_path, e))
             continue
-        # Which site this database came from is read from the database itself
-        # (its schema_flags source), not from a setting -- so a data path holding
-        # more than one kind of library sorts itself out.
+        # Which site this library came from is read from the library itself
+        # (the scrapers' schema_flags source; "patreon" from the adapter), not
+        # from the path it was found under -- so a data path holding more than
+        # one kind of library sorts itself out.
         source = sources.profile_for_source(db.source())
         # A per-site task must honour the site the DATABASE says it is, not the
         # path it was found under: the two sites can share a parent directory,

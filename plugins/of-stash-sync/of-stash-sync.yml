@@ -20,6 +20,14 @@ settings:
     displayName: JustFor.Fans Parent Studio
     description: "Name of the top-level JustFor.Fans studio. Per-creator studios are created beneath it. It must already exist in Stash. Default: JustForFans (network)"
     type: STRING
+  patreonDataPath:
+    displayName: Patreon Data Path
+    description: "Directory (as seen inside the Stash container, e.g. /data/patreon - NOT the NAS path) that patreon-dl downloads into. Each '<vanity> - <Creator Name>' folder beneath it is one creator. Leave blank if you have no Patreon library. Unlike the other sites there is no database: the post metadata is read from each post's post_info files."
+    type: STRING
+  patreonParentStudioName:
+    displayName: Patreon Parent Studio
+    description: "Name of the top-level Patreon studio. Per-creator studios are created beneath it. It must already exist in Stash. Default: Patreon (network)"
+    type: STRING
   maxTitleLength:
     displayName: Max Title Length
     description: "Maximum length of a generated title before it is truncated at a sentence or word boundary. Default: 65"
@@ -99,6 +107,11 @@ tasks:
     defaultArgs:
       mode: sync
       site: justforfans
+  - name: Sync Patreon Only
+    description: Same as Sync Metadata, but only scans the Patreon data path - faster when you just added Patreon content and don't want the other sites walked.
+    defaultArgs:
+      mode: sync
+      site: patreon
   - name: Sync Performer
     description: Full re-sync of a SINGLE performer, across every configured site. Triggered by the "Sync Fan Sites" button on a performer's page (it passes the performer id); running it here without one does nothing.
     defaultArgs:
