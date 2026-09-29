@@ -1283,11 +1283,28 @@ def main():
         log.LogError(msg)
         return msg
 
+    # Optional per-site scoping: the manifest's "Sync <Site>" tasks pass
+    # {"site": "<slug>"} so one site can be re-synced without walking the
+    # others' libraries. An unknown slug is fatal rather than ignored -- falling
+    # back to every site is the opposite of what a per-site task was asked for.
+    site = str(args.get("site") or "").strip().lower()
+    scoped_source = None
+    if site:
+        scoped_source = sources.profile_for_slug(site)
+        if scoped_source is None:
+            msg = "Unknown site '{}'. Known sites: {}.".format(
+                site, ", ".join(sources.slugs())
+            )
+            log.LogError(msg)
+            return msg
+
     # Each site has its own data path and parent studio; everything else is
     # shared. A site with no path configured is simply not scanned, so an
     # OnlyFans-only setup behaves exactly as it did before other sites existed.
     configured_sources = []
     for source in sources.ALL_PROFILES:
+        if scoped_source is not None and source is not scoped_source:
+            continue
         path = str(get_setting(config, source.path_setting, "") or "").strip()
         if not path:
             continue
@@ -1314,12 +1331,20 @@ def main():
     workers = max(1, min(workers, 16))  # clamp: 1 = sequential, cap concurrency
 
     if not configured_sources:
-        msg = (
-            "No data path configured. Set at least one of {} in the plugin "
-            "settings.".format(
-                " / ".join("'{}'".format(s.path_setting) for s in sources.ALL_PROFILES)
+        if scoped_source is not None:
+            msg = (
+                "No data path configured for {}. Set '{}' in the plugin settings, "
+                "or use a task that isn't scoped to one site.".format(
+                    scoped_source.label, scoped_source.path_setting
+                )
             )
-        )
+        else:
+            msg = (
+                "No data path configured. Set at least one of {} in the plugin "
+                "settings.".format(
+                    " / ".join("'{}'".format(s.path_setting) for s in sources.ALL_PROFILES)
+                )
+            )
         log.LogError(msg)
         return msg
 
@@ -1356,8 +1381,9 @@ def main():
                  "crew/sponsor credit pass" if crew_only else
                  "scoped performer re-sync" if performer_scope else
                  "{}metadata sync".format("FULL " if full_sync else ""))
-    log.LogInfo("Starting {} for: {}".format(
+    log.LogInfo("Starting {}{} for: {}".format(
         pass_name,
+        " scoped to {}".format(scoped_source.label) if scoped_source else "",
         ", ".join("{} ({})".format(src.label, path) for src, path in configured_sources)))
 
     # The parent studio is only needed by the passes that create studios, and it
@@ -1427,6 +1453,16 @@ def main():
         # (its schema_flags source), not from a setting -- so a data path holding
         # more than one kind of library sorts itself out.
         source = sources.profile_for_source(db.source())
+        # A per-site task must honour the site the DATABASE says it is, not the
+        # path it was found under: the two sites can share a parent directory,
+        # and 'user_data.db' is both scrapers' filename. Without this, "Sync
+        # OnlyFans" would happily sync a JustFor.Fans library sitting under the
+        # OnlyFans path.
+        if scoped_source is not None and source is not scoped_source:
+            log.LogDebug("Skipping {} ({} database, not {})".format(
+                db_path, source.label, scoped_source.label))
+            db.close()
+            continue
         # Only used for the URL on a performer this run creates.
         performers.source = source
         try:

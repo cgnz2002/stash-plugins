@@ -15,12 +15,16 @@ merging the two plugins cannot change what an existing OnlyFans library syncs to
 
 
 class SourceProfile:
-    def __init__(self, key, label, site_tag, studio_suffix, parent_setting,
+    def __init__(self, key, slug, label, site_tag, studio_suffix, parent_setting,
                  parent_default, path_setting, icon_file, profile_url,
                  post_url, media_code, link_domain):
         # Value of schema_flags.source that selects this profile (None = the
         # OnlyFans default, since OF-Scraper databases carry no such flag).
         self.key = key
+        # Stable identifier for the manifest's per-site tasks ({"site": slug}).
+        # Separate from `key` because that one is None for OnlyFans, which is
+        # fine as a database flag but useless as a task argument.
+        self.slug = slug
         self.label = label                  # human name, used in log lines
         self.site_tag = site_tag            # tag put on every synced item
         self.studio_suffix = studio_suffix  # per-creator studio "<user> (<suffix>)"
@@ -110,6 +114,7 @@ def _jff_media_code(processor, media_row, post_id):
 
 ONLYFANS = SourceProfile(
     key=None,
+    slug="onlyfans",
     label="OnlyFans",
     site_tag="OnlyFans",
     studio_suffix="OnlyFans",
@@ -125,6 +130,7 @@ ONLYFANS = SourceProfile(
 
 JUSTFORFANS = SourceProfile(
     key="jff",
+    slug="justforfans",
     label="JustFor.Fans",
     site_tag="JustFor.Fans",
     studio_suffix="JustForFans",
@@ -141,6 +147,18 @@ JUSTFORFANS = SourceProfile(
 ALL_PROFILES = [ONLYFANS, JUSTFORFANS]
 _BY_KEY = {p.key: p for p in ALL_PROFILES}
 _BY_DOMAIN = {p.link_domain: p for p in ALL_PROFILES}
+_BY_SLUG = {p.slug: p for p in ALL_PROFILES}
+
+
+def profile_for_slug(slug):
+    """Profile named by a per-site task's ``site`` argument, or None if the slug
+    isn't one we know (the caller reports that rather than silently syncing
+    everything, which is the opposite of what a per-site task was asked to do)."""
+    return _BY_SLUG.get(str(slug).strip().lower()) if slug else None
+
+
+def slugs():
+    return [p.slug for p in ALL_PROFILES]
 
 
 def profile_for_source(source):

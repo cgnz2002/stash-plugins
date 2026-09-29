@@ -1,6 +1,6 @@
 name: Fan Site Metadata Sync (OnlyFans + JustFor.Fans)
 description: Sync scraped metadata (title, details, date, post URL, performers, studio, tags) from OF-Scraper and jff-scraper user_data.db files into matching Stash scenes and images, group each post's media into a gallery, and adopt the galleries Stash makes from scanned image folders. Each database's site is detected from the database itself.
-version: 2.1.2
+version: 2.2.0
 url: https://github.com/cgnz2002/stash-plugins
 
 settings:
@@ -89,6 +89,16 @@ tasks:
     description: Re-apply only the crew and sponsor logic to ALL synced scenes and images - move director/photographer-tagged people into the director/photographer field, and drop sponsor-tagged accounts from the performers list in favour of a 'sponsored' tag. Leaves titles, dates, studios and everything else untouched (the only tag change is adding 'sponsored'). Use after tagging new performers as crew or sponsors, to avoid a full re-sync.
     defaultArgs:
       mode: crew
+  - name: Sync OnlyFans Only
+    description: Same as Sync Metadata, but only scans the OnlyFans data path - faster when you just added OnlyFans content and don't want the other sites walked. Databases under that path that identify as another site are skipped.
+    defaultArgs:
+      mode: sync
+      site: onlyfans
+  - name: Sync JustFor.Fans Only
+    description: Same as Sync Metadata, but only scans the JustFor.Fans data path - faster when you just added JustFor.Fans content and don't want the other sites walked. Databases under that path that identify as another site are skipped.
+    defaultArgs:
+      mode: sync
+      site: justforfans
   - name: Sync Performer
     description: Full re-sync of a SINGLE performer, across every configured site. Triggered by the "Sync Fan Sites" button on a performer's page (it passes the performer id); running it here without one does nothing.
     defaultArgs:
