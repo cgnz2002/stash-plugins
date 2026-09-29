@@ -185,8 +185,14 @@ Stash first so the scenes and images exist.
   library and don't want the others walked. The site is confirmed from each
   library itself, not the path it was found under, so a database belonging to
   another site sitting under that path is skipped rather than swept in.
+- **Full Sync OnlyFans/JustFor.Fans/Patreon Only** - the same, but a full
+  re-sync: ignores the organized flag, so it re-processes that site's whole
+  library. This is also how you pick up media an *older* plugin already marked
+  organized.
 - **Preview (Dry Run)** - a full sync that writes nothing, logging every change
-  it would make. See [Dry run](#dry-run).
+  it would make. See [Dry run](#dry-run). To preview **one site**, turn the
+  *Dry Run* setting on and run that site's Full Sync task — the setting applies
+  to every task, so you get a scoped preview without a task per site per mode.
 - **Update Crew & Sponsors** - re-apply only the crew and sponsor logic to ALL
   synced scenes and images: move crew-tagged people (see *Crew Tag ID*) into the
   Director / Photographer field and out of the performers list, and drop
