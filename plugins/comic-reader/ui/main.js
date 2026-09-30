@@ -67,6 +67,12 @@
       });
     }
     if (path === CR.ROUTE + "/new" && CR.Builder) return h(CR.Builder, { history: history });
+    var series = path.match(/^\/plugins\/comics\/series(?:\/(\d+))?$/);
+    if (series && CR.SeriesPage) {
+      return series[1]
+        ? h(CR.SeriesPage, { key: series[1], seriesId: series[1], history: history })
+        : h(CR.SeriesIndex, { history: history });
+    }
     return h(CR.Library, { history: history });
   }
 

@@ -176,7 +176,8 @@
       div.className = "cr-gallery-actions";
       return div;
     }, [nav]);
-    var state = React.useState(null); // {tags, family, gallery}
+    var state = React.useState(null); // {tags, family, gallery, series}
+    var dialog = React.useState(false);
     var busy = React.useState(false);
     var toast = CR.useToast();
     var reload = React.useState(0);
@@ -193,8 +194,9 @@
       Promise.all([
         CR.tags(), CR.family(),
         CR.gql("query ($id: ID!) { findGallery(id: $id) { id image_count tags { id } } }", { id: id }),
+        CR.seriesList().catch(function () { return []; }),
       ]).then(function (r) {
-        if (live) state[1]({ tags: r[0], family: r[1], gallery: r[2].findGallery });
+        if (live) state[1]({ tags: r[0], family: r[1], gallery: r[2].findGallery, series: r[3] });
       }).catch(function (e) { console.error("[comic-reader] gallery lookup failed:", e); });
       return function () { live = false; };
     }, [id, reload[0]]);
@@ -211,6 +213,7 @@
     var s = state[0];
     var comic = CR.isComic(s.gallery.tags, s.family);
     var webtoon = CR.hasTag(s.gallery.tags, s.tags.webtoon);
+    var inSeries = CR.seriesOf(s.gallery.tags, s.series);
 
     function change(add, remove, done) {
       busy[1](true);
@@ -239,6 +242,10 @@
             change([], present, "No longer a comic; it is back in Galleries");
           },
         }, "Not a comic"),
+        h("button", { key: "series", type: "button", className: "btn btn-secondary btn-sm", disabled: busy[0],
+                      title: inSeries ? "Change or leave the series" : "Put it in a series, read in release order",
+                      onClick: function () { dialog[1](true); } },
+          inSeries ? "Series: " + inSeries.name : "Add to series"),
       ];
     } else {
       buttons = [
@@ -254,7 +261,16 @@
           "Mark as webtoon"),
       ];
     }
-    return ReactDOM.createPortal(h(React.Fragment, null, buttons), host);
+    var modal = dialog[0] && CR.SeriesDialog
+      ? h(CR.SeriesDialog, {
+          key: "dialog", galleryIds: [String(id)], current: inSeries,
+          onClose: function (changed) {
+            dialog[1](false);
+            if (changed) reload[1](function (n) { return n + 1; });
+          },
+        })
+      : null;
+    return ReactDOM.createPortal(h(React.Fragment, null, buttons, modal), host);
   }
 
   // --------------------------------------------------------------- root

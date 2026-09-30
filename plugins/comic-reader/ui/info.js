@@ -111,6 +111,8 @@
     var family = props.family || [];
     var Rating = !loading && api.components.RatingSystem;
     var StashDate = !loading && api.components.Date;
+    var dialog = React.useState(false);
+    var sr = props.series; // {series, comics, index, prev, next} or null
 
     function setRating(v) {
       var prev = rating[0];
@@ -121,6 +123,8 @@
         .catch(function (e) { rating[1](prev); toast.error(e); });
     }
 
+    // The comic tags (Comic, Webtoon, the series tag...) are bookkeeping, shown
+    // as the format and the Series section instead.
     var tags = (g.tags || []).filter(function (t) { return family.indexOf(String(t.id)) < 0; });
     var performers = g.performers || [];
     var urls = g.urls || [];
@@ -154,6 +158,31 @@
           h(Rating, { value: rating[0], onSetRating: setRating, clickToRate: true, withoutContext: true })))
         : null,
       g.details ? h("p", { className: "pre cr-info-details" }, g.details) : null,
+      h(Section, { show: true, title: "Series" },
+        sr
+          ? h("div", { className: "cr-info-series" },
+              h("a", Object.assign({ className: "cr-info-series-name", title: "All of " + sr.series.name },
+                CR.linkProps(history, CR.seriesPath(sr.series.id))), sr.series.name),
+              h("span", { className: "text-muted" }, " · " + (sr.index + 1) + " of " + sr.comics.length),
+              h("div", { className: "cr-info-series-nav" },
+                h(CR.Button, { variant: "secondary", size: "sm", disabled: !sr.prev, title: sr.prev ? CR.galleryTitle(sr.prev) : "",
+                               onClick: function () { props.onOpen(sr.prev.id); } },
+                  h(CR.Icon, { name: "faArrowLeft" }), " Previous"),
+                h(CR.Button, { variant: "secondary", size: "sm", disabled: !sr.next, title: sr.next ? CR.galleryTitle(sr.next) : "",
+                               onClick: function () { props.onOpen(sr.next.id); } },
+                  "Next ", h(CR.Icon, { name: "faArrowRight" })),
+                h(CR.Button, { variant: "link", size: "sm", onClick: function () { dialog[1](true); } }, "Change")))
+          : h(CR.Button, { variant: "secondary", size: "sm", onClick: function () { dialog[1](true); } },
+              h(CR.Icon, { name: "faPlus" }), " Add to a series")),
+      dialog[0] && CR.SeriesDialog
+        ? h(CR.SeriesDialog, {
+            galleryIds: [String(g.id)], current: sr ? sr.series : null,
+            onClose: function (changed) {
+              dialog[1](false);
+              if (changed && props.onSeriesChanged) props.onSeriesChanged();
+            },
+          })
+        : null,
       h(Section, { show: performers.length > 0, title: performers.length === 1 ? "Performer" : "Performers" },
         h("div", { className: "cr-info-people" },
           performers.map(function (p) {

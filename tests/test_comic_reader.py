@@ -223,6 +223,15 @@ responder = respond((q) => {
 assert.strictEqual(be.onHook({ type: "Gallery.Update.Post", id: 4, inputFields: ["title", "date"] }), "skipped");
 assert.ok(!calls.some((q) => q.indexOf("findImages") >= 0));
 
+// ...and neither costs a single query -- nor does the reader saving progress
+// on a COMIC (custom_fields only), which it does every few page turns. That
+// update can't make or unmake a comic, and gallery updates never move images.
+calls.length = 0;
+responder = () => { throw new Error("no query expected"); };
+assert.strictEqual(be.onHook({ type: "Gallery.Update.Post", id: 12, inputFields: ["id", "custom_fields"] }), "skipped");
+assert.strictEqual(be.onHook({ type: "Gallery.Update.Post", id: 4, inputFields: ["title", "date"] }), "skipped");
+assert.strictEqual(calls.length, 0);
+
 // an image edit that didn't move it between galleries costs nothing -- not
 // even the config read -- because every image the sync plugin rewrites fires it
 calls.length = 0;
@@ -285,7 +294,7 @@ const win = { PluginApi: { React: { createElement() {}, useState() {}, Component
 win.window = win;
 win.Intl = Intl;
 vm.createContext(win);
-for (const p of ["ui/common.js", "ui/info.js", "ui/reader.js", "ui/builder.js"]) vm.runInContext(read(p), win);
+for (const p of ["ui/common.js", "ui/info.js", "ui/reader.js", "ui/series.js", "ui/builder.js"]) vm.runInContext(read(p), win);
 const CR = win.ComicReader;
 
 const P = (w, h) => ({ width: w, height: h });
@@ -319,6 +328,30 @@ assert.strictEqual(CR.suggestTitle([{ title: "" }]), "");
 assert.strictEqual(CR.galleryTitle({ id: 1, title: "", files: [{ path: "/lib/Space Pals - Issue 1.cbz" }] }), "Space Pals - Issue 1");
 assert.strictEqual(CR.galleryTitle({ id: 2, title: "Named" }), "Named");
 assert.strictEqual(CR.galleryTitle({ id: 3, title: "", files: [], folder: { path: "/lib/Folder Comic" } }), "Folder Comic");
+
+// Synced progress: stored 1-based on the gallery (readable in Stash), used
+// 0-based; Stash hands a true custom field back as 1.
+eq(CR.progressOf({ custom_fields: { comic_page: 4, comic_read_at: "2026-09-30T14:00:00Z", comic_seen: 5 } }),
+   { page: 3, finished: false, readAt: "2026-09-30T14:00:00Z", seen: 5 });
+eq(CR.progressOf({ custom_fields: { comic_finished: 1 } }).finished, true);
+eq(CR.progressOf({ custom_fields: { comic_finished: "true" } }).finished, true);
+eq(CR.progressOf({ custom_fields: { comic_finished: 0 } }).finished, false);
+eq(CR.progressOf({}), { page: null, finished: false, readAt: null, seen: 0 });
+eq(CR.progressOf({ custom_fields: { comic_page: 0 } }).page, null);
+
+// Series: release order is date, then title (naturally), undated last.
+const ep = (id, date, title) => ({ id, date, title, custom_fields: {} });
+eq(CR.seriesOrder([ep("c", "2026-02-01", "Ch 3"), ep("x", null, "Extra"), ep("b", "2026-01-15", "Ch 10"), ep("a", "2026-01-15", "Ch 2")])
+   .map((g) => g.id), ["a", "b", "c", "x"]);
+// Continue goes to the one part-way through, else the first unfinished.
+const done = (g) => Object.assign(g, { custom_fields: { comic_finished: 1 } });
+const mid = (g) => Object.assign(g, { custom_fields: { comic_page: 2 } });
+eq(CR.continueTarget([done(ep("a")), ep("b"), mid(ep("c"))]).id, "c");
+eq(CR.continueTarget([done(ep("a")), ep("b"), ep("c")]).id, "b");
+eq(CR.continueTarget([done(ep("a")), done(ep("b"))]).id, "a", "all read: start again");
+assert.strictEqual(CR.continueTarget([]), null);
+eq(CR.seriesOf([{ id: 5 }, { id: "8" }], [{ id: "8", name: "Moon Quest" }]).name, "Moon Quest");
+assert.strictEqual(CR.seriesOf([{ id: 5 }], [{ id: "8", name: "Moon Quest" }]), null);
 
 // Details panel links: "comics with this tag" must decode with Stash's own
 // list-URL decoder (translateJSON in the v0.31 bundle, copied as shipped),
@@ -385,7 +418,7 @@ const ui = {
 };
 ui.window = ui;
 vm.createContext(ui);
-for (const p of ["ui/common.js", "ui/info.js", "ui/reader.js", "ui/library.js", "ui/builder.js", "ui/inject.js", "ui/main.js"]) vm.runInContext(read(p), ui);
+for (const p of ["ui/common.js", "ui/info.js", "ui/reader.js", "ui/library.js", "ui/series.js", "ui/builder.js", "ui/inject.js", "ui/main.js"]) vm.runInContext(read(p), ui);
 
 function stashCall(name, target, args) {           // RB, as shipped
   for (const b of patches.before[name] || []) args = b.apply(null, args);

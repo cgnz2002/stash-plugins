@@ -15,6 +15,8 @@
 //   Webtoon     - child of Comic; read as one continuous scroll
 //   Comic Page  - child of Comic; put on every image inside a comic so the
 //                 Images page can hide pages (its filter can't see galleries)
+//   Comic Series - child of Comic; each series is a tag under it, so putting
+//                 a gallery in a series also makes it a comic
 // "Is a comic" means tagged Comic or any descendant, so tagging a gallery
 // Webtoon alone is enough, and one hierarchical exclusion hides everything.
 
@@ -26,7 +28,9 @@ var TAGS = [
   { key: "webtoonTagId", name: "Webtoon", parent: "comicTagId",
     description: "Comics read as one continuous vertical scroll. Added by Comic Reader." },
   { key: "comicPageTagId", name: "Comic Page", parent: "comicTagId",
-    description: "Images inside a comic. Kept up to date by Comic Reader; used to hide comic pages from the Images page." }
+    description: "Images inside a comic. Kept up to date by Comic Reader; used to hide comic pages from the Images page." },
+  { key: "seriesTagId", name: "Comic Series", parent: "comicTagId",
+    description: "Each tag under this one is a comic series; its comics are the galleries tagged with it. Added by Comic Reader." }
 ];
 
 // The list views whose default filter leaves comics out. The performer and
@@ -408,6 +412,11 @@ function onHook(ctx) {
   // rewrites -- so it bails out before any query unless the edit moved the
   // image between galleries (image edit / bulk edit "Galleries").
   if (type === "Image.Update.Post" && (!fields || fields.indexOf("gallery_ids") < 0)) return "skipped";
+  // Likewise a gallery edit that lists its fields and not tag_ids: it can't
+  // have made or unmade a comic, and a gallery update never changes which
+  // images it holds. That covers the sync plugin rewriting metadata and the
+  // reader saving progress (custom_fields only) -- no query at all.
+  if (type === "Gallery.Update.Post" && fields && fields.length && fields.indexOf("tag_ids") < 0) return "skipped";
 
   var tags = configuredTags();
   if (!tags || !type) return "not set up";
@@ -486,10 +495,8 @@ function onHook(ctx) {
       log.Info("[comic-reader] Marked new .cbz gallery " + gal.id + " as a comic");
       return "marked cbz";
     }
-    // A non-comic update that didn't touch tags can't have unmarked a comic,
-    // so there is nothing to untag -- skip the query. This keeps a big sync
-    // that rewrites thousands of galleries cheap.
-    if (!comic && !tagEdit) return "skipped";
+    // (Explicit non-tag edits already left above; this is what remains.)
+    if (!tagEdit) return "skipped";
     var n = syncGalleryPages(tags, gal.id, comic, fam);
     return (n >= 0 ? "tagged " : "untagged ") + Math.abs(n);
   }

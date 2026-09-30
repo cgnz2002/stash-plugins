@@ -70,6 +70,51 @@
 /* On touch screens there is no hover, and none is needed: the whole cover
    opens the reader, and the card's progress bar shows how far it's read. */
 
+/* Comics | Series tabs, and the rows above the list. */
+.cr-tabs {
+  margin-bottom: 0.75rem;
+}
+.cr-shelf {
+  margin-bottom: 1rem;
+}
+/* A sideways-scrolling row: cards keep their width, the row scrolls. */
+.cr-shelf-cards {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 0 15px 0.5rem;
+  scroll-snap-type: x proximity;
+}
+.cr-shelf-cards > .grid-card {
+  flex: none;
+  margin: 0;
+  scroll-snap-align: start;
+}
+/* On phones Stash makes every gallery card full width (right for a grid,
+   wrong for a row): two and a bit per screen instead, hinting it scrolls. */
+@media (max-width: 576px) {
+  .cr-shelf-cards > .gallery-card.card {
+    width: 42vw;
+  }
+}
+
+/* A series' own page. */
+.cr-series-head {
+  margin: 0 15px 1rem;
+}
+.cr-series-head h2 {
+  margin-bottom: 0.25rem;
+}
+.cr-series-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+.cr-series-card .card-section-details {
+  font-size: 0.85rem;
+}
+
 /* ------------------------------------------------------ performer/studio tab */
 
 .cr-tab-pane {
@@ -183,6 +228,13 @@
 }
 .cr-info-section {
   margin-bottom: 1rem;
+}
+.cr-info-series-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
 }
 .cr-info-links {
   display: flex;
@@ -337,6 +389,14 @@
 }
 .cr-scroll-end {
   padding: 3rem 1rem 6rem;
+}
+/* "Next in <series>" on the end card. */
+.cr-next {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 1rem;
 }
 .cr-end-actions {
   display: flex;

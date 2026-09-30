@@ -96,6 +96,7 @@ plugins/
     ui/common.js                     Shared UI helpers; defines window.ComicReader (load first)
     ui/info.js                       The reader's details panel (docked, or a sheet on phones)
     ui/reader.js, ui/library.js      The reader; the Comics list (Stash's own) + comic cards
+    ui/series.js                     Series: add-to-series dialog, Series tab, a series' page
     ui/builder.js                    "New comic from images"
     ui/inject.js                     Comics tab on performer/studio pages, gallery-page buttons
     ui/main.js                       Route + nav item + injector wiring (load last)
@@ -618,7 +619,9 @@ its README. What matters when changing it:
 - **Interplay with of-stash-sync:** its Full Sync keeps every tag under
   comic-reader's `comicTagId` (see `ProtectedTags` above), so the settings
   key names `comicTagId` / `webtoonTagId` / `comicPageTagId` are a contract
-  between the two plugins -- don't rename them.
+  between the two plugins -- don't rename them. `seriesTagId` (Comic
+  Series) sits under Comic, so series ride along without of-stash-sync
+  knowing about them.
 - **The Comics list is Stash's `FilteredGalleryList`, not a copy of it.**
   The user asked for exactly Stash's listing (search, saved filters and *Set
   as default*, filter dialog and chips, sort, per page, operations, zoom,
@@ -653,6 +656,34 @@ its README. What matters when changing it:
   a theme's card can be translucent. `CR.returnToTab` is consumed when the
   Comics tab has actually *shown*, not on mount: Stash redirects
   `/performers/1` to its default tab and the tab can mount twice on the way.
+- **Reading progress is synced on the gallery** (custom fields
+  `comic_page` 1-based, `comic_finished`, `comic_read_at`, `comic_seen`),
+  written by `CR.saveProgress` 1.5 s after the page settles, at once on
+  reaching the end, and flushed when the reader closes or the tab hides;
+  just opening a comic writes nothing. Stash stores a boolean custom field
+  as `1`, hence `progressOf` accepting 1/"true". Stash's list data
+  (`SlimGalleryData`) has no custom fields, so card grids fetch them once per
+  page (`CR.useProgress`). Every save fires `Gallery.Update.Post`, so the
+  hook returns before any query for a gallery edit that lists fields without
+  `tag_ids` -- a gallery update can't change which images it holds. The old
+  per-browser `page:<id>` localStorage note is read only for a comic with no
+  synced progress at all, and zeroed on the first sync.
+- **Series are tags under `Comic Series`** (`seriesTagId`, a child of Comic,
+  so the whole tree stays inside of-stash-sync's `ProtectedTags`). Order is
+  date, then natural title (`CR.seriesOrder`), undated last. Joining a series
+  also adds `Comic`: a hide filter merged into a user's existing criterion
+  lists the family id by id, so a series tag created later isn't in it.
+  `CR.ensureSeries` reuses a same-named tag (name or alias, any case) and
+  puts it under Comic Series, since Stash won't allow a second tag of that
+  name. The **Series tab is a plain grid, not Stash's `FilteredTagList`**:
+  that component hard-codes its view to `tags`, so its *Set as default* would
+  rewrite the Tags page's default. A series' page is `CR.ComicsList` with
+  view `series_comics`, whose default filter is seeded once to date ASC --
+  followed by a refetch of Stash's cached settings, because the list reads
+  default filters from that cache and would otherwise start by path. The
+  reader's window key handler ignores keys while a Bootstrap modal is open
+  (`body.modal-open`): react-bootstrap's Esc closes the dialog, and the same
+  event used to close the reader behind it too.
 - **Look and theming: build from Stash's own parts.** Cards are
   `PluginApi.components.GridCard` with the `gallery-card` class names and
   Stash's own `GalleryCard.Overlays/Details/Popovers`, sized like Stash's
