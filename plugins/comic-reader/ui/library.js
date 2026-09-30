@@ -112,18 +112,26 @@
   // GalleryCard.Overlays / .Details / .Popovers for the studio logo, date and
   // the tag / performer / image-count buttons -- so a theme, or another
   // plugin that patches those parts, applies here too. What's comic-specific
-  // is the portrait cover, the format and page-count badges, the Read /
-  // Continue button and GridCard's own progress bar for how far it's read.
+  // is the portrait cover, the badges, the Read / Continue button and
+  // GridCard's own progress bar for how far it's read.
+  //
+  // props.progress is CR.progressOf() for the gallery (synced on the
+  // gallery); without it, this browser's old local note is used. `plain`
+  // leaves out Stash's card parts, for shelves whose gallery data is ours
+  // rather than Stash's list data.
   function ComicCard(props) {
     var ctx = React.useContext(CR.ComicsContext) || {};
     var comps = api.components;
     var g = props.gallery;
     var title = CR.galleryTitle(g);
-    var read = CR.store.get("page:" + g.id, 0);
+    var prog = props.progress || { page: CR.store.get("page:" + g.id, 0) || null, finished: false, seen: 0 };
+    var count = g.image_count || 0;
+    var reading = prog.page !== null && prog.page > 0 && prog.page + 1 < count;
+    var fresh = prog.seen > 0 && count > prog.seen ? count - prog.seen : 0;
     var webtoon = ctx.tags && CR.hasTag(g.tags, ctx.tags.webtoon);
     var sub = function (name) {
       var C = comps["GalleryCard." + name];
-      return C ? h(CR.Boundary, { name: "card " + name }, h(C, props)) : null;
+      return C && !props.plain ? h(CR.Boundary, { name: "card " + name }, h(C, props)) : null;
     };
 
     var cover = h("div", { className: "cr-cover" },
@@ -131,15 +139,18 @@
         ? h("img", { className: "gallery-card-image cr-cover-img", loading: "lazy", alt: title, src: g.paths.cover })
         : null,
       h("div", { className: "cr-cover-badges" },
+        fresh ? h("span", { className: "badge badge-primary" }, fresh + " new") : null,
+        prog.finished && !reading && !fresh
+          ? h("span", { className: "badge badge-success", title: "Read to the end" }, h(CR.Icon, { name: "faCheck" }), " Read")
+          : null,
         webtoon ? h("span", { className: "badge badge-info" }, "Webtoon") : null,
-        h("span", { className: "badge badge-secondary" },
-          (g.image_count || 0) + (g.image_count === 1 ? " page" : " pages"))),
+        h("span", { className: "badge badge-secondary" }, count + (count === 1 ? " page" : " pages"))),
       h("span", { className: "cr-cover-read btn btn-primary btn-sm" },
         h(CR.Icon, { name: "faBookOpen" }),
-        read > 0 && read + 1 < (g.image_count || 0) ? " Continue · p. " + (read + 1) : " Read"));
+        reading ? " Continue · p. " + (prog.page + 1) : prog.finished ? " Read again" : " Read"));
 
     return h(comps.GridCard, {
-      className: "gallery-card cr-comic-card zoom-" + props.zoomIndex,
+      className: "gallery-card cr-comic-card zoom-" + (props.zoomIndex || 0),
       // An object `to`, so the reader knows it was opened from inside the
       // app and its Back returns here.
       url: { pathname: CR.readerPath(g.id), state: { cr: true } },
@@ -153,22 +164,37 @@
       selected: props.selected,
       selecting: props.selecting,
       onSelectedChanged: props.onSelectedChanged,
-      resumeTime: read > 0 ? read + 1 : undefined,
-      duration: read > 0 ? g.image_count : undefined,
+      resumeTime: reading ? prog.page + 1 : undefined,
+      duration: reading ? count : undefined,
     });
   }
+  CR.ComicCard = ComicCard;
+
+  // Progress for the galleries on screen, re-read whenever the list changes.
+  CR.useProgress = function (galleries) {
+    var ids = (galleries || []).map(function (g) { return String(g.id); });
+    var key = ids.join(",");
+    var s = React.useState({});
+    React.useEffect(function () {
+      var live = true;
+      CR.fetchProgress(ids).then(function (m) { if (live) s[1](m); });
+      return function () { live = false; };
+    }, [key]);
+    return s[0];
+  };
 
   // Stands in for GalleryCardGrid inside a Comics list: same props, same
   // row markup, portrait card widths.
   function ComicCardGrid(props) {
     var measure = CR.useContainerWidth();
+    var progress = CR.useProgress(props.galleries);
     var zoom = props.zoomIndex || 0;
     var width = CR.cardWidth(measure[1], ZOOM_WIDTHS[Math.max(0, Math.min(3, zoom))]);
     var selected = props.selectedIds || { size: 0, has: function () { return false; } };
     return h("div", { className: "row justify-content-center", ref: measure[0] },
       (props.galleries || []).map(function (g) {
         return h(ComicCard, {
-          key: g.id, gallery: g, cardWidth: width, zoomIndex: zoom,
+          key: g.id, gallery: g, cardWidth: width, zoomIndex: zoom, progress: progress[g.id],
           selecting: selected.size > 0, selected: selected.has(g.id),
           onSelectedChanged: function (on, shift) { if (props.onSelectChange) props.onSelectChange(g.id, on, shift); },
         });
@@ -176,14 +202,81 @@
   }
   CR.ComicCardGrid = ComicCardGrid;
 
+  // ---------------------------------------------------------------- shelf
+
+  // A titled, sideways-scrolling row of cards, headed like Stash's own front
+  // page rows.
+  CR.Shelf = function (props) {
+    return h("div", { className: "recommendation-row cr-shelf" },
+      h("div", { className: "recommendation-row-head" },
+        h("div", null, h("h2", null, props.title)),
+        props.more || null),
+      h("div", { className: "cr-shelf-cards" }, props.children));
+  };
+
+  // Comics part-way through, most recently read first.
+  function ContinueReading() {
+    var data = CR.useAsync(function () {
+      return CR.tags().then(function (tags) {
+        return CR.gql("query ($f: GalleryFilterType) { findGalleries(gallery_filter: $f, filter: {per_page: -1}) { galleries { " +
+            CR.GALLERY_FIELDS + " } } }",
+          { f: CR.comicFilter(tags, { custom_fields: [{ field: "comic_page", modifier: "NOT_NULL" }] }) });
+      }).then(function (d) {
+        return d.findGalleries.galleries.sort(function (a, b) {
+          var ra = CR.progressOf(a).readAt || "", rb = CR.progressOf(b).readAt || "";
+          return ra < rb ? 1 : ra > rb ? -1 : 0;
+        }).slice(0, 20);
+      });
+    }, []);
+    if (!data.data || !data.data.length) return null;
+    return h(CR.Shelf, { title: "Continue reading" },
+      data.data.map(function (g) {
+        return h(ComicCard, { key: g.id, gallery: g, plain: true, cardWidth: 170, progress: CR.progressOf(g) });
+      }));
+  }
+  CR.ContinueReading = ContinueReading;
+
   // ------------------------------------------------------------- the page
+
+  // Comics | Series, as Stash's own tabs.
+  CR.LibraryTabs = function (props) {
+    var Nav = CR.Bootstrap.Nav;
+    var tabs = [{ key: "comics", label: "Comics", to: CR.ROUTE }, { key: "series", label: "Series", to: CR.seriesPath() }];
+    if (!Nav) return null;
+    return h(Nav, { variant: "tabs", className: "cr-tabs", activeKey: props.active },
+      tabs.map(function (t) {
+        return h(Nav.Item, { key: t.key },
+          h(Nav.Link, Object.assign({ eventKey: t.key }, CR.linkProps(props.history, t.to)), t.label));
+      }));
+  };
+
+  // "Add to series…" for the comics selected in a list.
+  CR.useSeriesOperation = function (onChanged) {
+    var dialog = React.useState(null); // gallery ids
+    var op = React.useMemo(function () {
+      return {
+        text: "Add to series…",
+        isDisplayed: function (result, filter, selectedIds) { return !!selectedIds && selectedIds.size > 0; },
+        onClick: function (result, filter, selectedIds) { dialog[1](Array.from(selectedIds || [])); },
+      };
+    }, []);
+    var modal = dialog[0] && CR.SeriesDialog
+      ? h(CR.SeriesDialog, {
+          galleryIds: dialog[0], current: null,
+          onClose: function (changed) { dialog[1](null); if (changed && onChanged) onChanged(); },
+        })
+      : null;
+    return { op: op, modal: modal };
+  };
 
   function Library(props) {
     var toast = CR.useToast();
     var history = props.history;
+    var series = CR.useSeriesOperation();
     // Added to the list's own "…" operations menu.
     var ops = React.useMemo(function () {
       return [
+        series.op,
         { text: "New comic from images…", onClick: function () { history.push(CR.ROUTE + "/new", { cr: true }); } },
         {
           text: "Set up / repair comics",
@@ -194,9 +287,12 @@
           },
         },
       ];
-    }, [history]);
+    }, [history, series.op]);
     return h("div", { className: "cr-library" },
-      h(ComicsList, { view: "comics", alterQuery: true, history: history, extraOperations: ops }));
+      h(CR.LibraryTabs, { active: "comics", history: history }),
+      h(CR.Boundary, { name: "continue reading" }, h(ContinueReading)),
+      h(ComicsList, { view: "comics", alterQuery: true, history: history, extraOperations: ops }),
+      series.modal);
   }
 
   CR.ComicsList = ComicsList;

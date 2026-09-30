@@ -63,7 +63,7 @@
     tagsPromise = CR.gql('query { configuration { plugins(include: ["' + CR.PLUGIN_ID + '"]) } }')
       .then(function (d) {
         var cfg = ((d.configuration || {}).plugins || {})[CR.PLUGIN_ID] || {};
-        if (cfg.comicTagId && cfg.webtoonTagId && cfg.comicPageTagId) return cfg;
+        if (cfg.comicTagId && cfg.webtoonTagId && cfg.comicPageTagId && cfg.seriesTagId) return cfg;
         return CR.runOperation({ mode: "tags" });
       })
       .then(function (cfg) {
@@ -71,6 +71,7 @@
           comic: String(cfg.comicTagId),
           webtoon: String(cfg.webtoonTagId),
           page: String(cfg.comicPageTagId),
+          series: String(cfg.seriesTagId),
           ratio: Number(cfg.webtoonRatio) > 0 ? Number(cfg.webtoonRatio) : 2,
         };
       })
@@ -102,6 +103,16 @@
       var client = svc && svc.getClient && svc.getClient();
       if (client && client.refetchQueries) client.refetchQueries({ include: "active" });
     } catch (e) { /* cosmetic only */ }
+  };
+
+  // The same, waiting for it: for when what is drawn next depends on it.
+  CR.refetchStash = function () {
+    try {
+      var svc = api.utils && api.utils.StashService;
+      var client = svc && svc.getClient && svc.getClient();
+      if (client && client.refetchQueries) return Promise.resolve(client.refetchQueries({ include: "active" })).catch(function () {});
+    } catch (e) { /* fall through */ }
+    return Promise.resolve();
   };
 
   // "Is a comic": tagged Comic or anything under it, so Webtoon alone counts.
@@ -137,6 +148,163 @@
     if (value !== null) cf.partial[key] = value;
     return CR.gql("mutation ($i: GalleryUpdateInput!) { galleryUpdate(input: $i) { id } }",
       { i: { id: galleryId, custom_fields: cf } });
+  };
+
+  // ------------------------------------------------------------- progress
+  //
+  // Reading progress lives on the gallery itself, as custom fields, so it is
+  // the same on every device and visible in Stash:
+  //   comic_page     the page you're on, counting from 1; absent when not
+  //                  part-way through
+  //   comic_finished true once read to the end
+  //   comic_read_at  when it was last read (ISO time), for "Continue reading"
+  //   comic_seen     how many pages it had then, to tell new pages apart
+  CR.progressOf = function (g) {
+    var cf = (g && g.custom_fields) || {};
+    var page = Number(cf.comic_page);
+    return {
+      page: page >= 1 ? page - 1 : null,
+      // Stash stores a true custom field as 1.
+      finished: [true, 1, "true", "1"].indexOf(cf.comic_finished) >= 0,
+      readAt: cf.comic_read_at || null,
+      seen: Number(cf.comic_seen) || 0,
+    };
+  };
+
+  // page: 0-based index, or "end". Only these fields are sent (a partial
+  // update), so the gallery's other custom fields are left alone.
+  CR.saveProgress = function (galleryId, page, total) {
+    var cf = { partial: { comic_read_at: new Date().toISOString(), comic_seen: total } };
+    if (page === "end") {
+      cf.partial.comic_finished = true;
+      cf.remove = ["comic_page"];
+    } else {
+      cf.partial.comic_page = page + 1;
+    }
+    return CR.gql("mutation ($i: GalleryUpdateInput!) { galleryUpdate(input: $i) { id } }",
+      { i: { id: String(galleryId), custom_fields: cf } });
+  };
+
+  // Progress for many galleries in one query (Stash's list data has no
+  // custom fields). findGalleries(ids) fails outright if one id has gone, so
+  // a failure just means no progress shown.
+  CR.fetchProgress = function (ids) {
+    if (!ids.length) return Promise.resolve({});
+    return CR.gql("query ($ids: [ID!]) { findGalleries(ids: $ids, filter: {per_page: -1}) { galleries { id custom_fields } } }",
+      { ids: ids.map(String) })
+      .then(function (d) {
+        var out = {};
+        d.findGalleries.galleries.forEach(function (g) { out[g.id] = CR.progressOf(g); });
+        return out;
+      })
+      .catch(function () { return {}; });
+  };
+
+  // --------------------------------------------------------------- series
+  //
+  // A series is a tag under "Comic Series"; its comics are the galleries
+  // tagged with it, in release order (date, then title).
+
+  var seriesPromise = null;
+  CR.seriesList = function () {
+    if (seriesPromise) return seriesPromise;
+    seriesPromise = CR.tags().then(function (tags) {
+      return CR.gql("query ($id: ID!) { findTags(tag_filter: {parents: {value: [$id], modifier: INCLUDES}}, filter: {per_page: -1, sort: \"name\"}) { tags { id name description image_path } } }",
+        { id: tags.series });
+    }).then(function (d) {
+      return d.findTags.tags.map(function (t) {
+        return { id: String(t.id), name: t.name, description: t.description || "",
+                 image: t.image_path && t.image_path.indexOf("default=true") < 0 ? t.image_path : null };
+      });
+    }).catch(function (e) { seriesPromise = null; throw e; });
+    return seriesPromise;
+  };
+  CR.forgetSeries = function () { seriesPromise = null; };
+
+  // The series a gallery is in, from its tags, or null.
+  CR.seriesOf = function (tagList, series) {
+    var ids = {};
+    (series || []).forEach(function (s) { ids[s.id] = s; });
+    for (var i = 0; i < (tagList || []).length; i++) {
+      var hit = ids[String(tagList[i].id)];
+      if (hit) return hit;
+    }
+    return null;
+  };
+
+  CR.seriesOrder = function (galleries) {
+    return galleries.slice().sort(function (a, b) {
+      var da = a.date || "", db = b.date || "";
+      if (da !== db) return da ? (db ? (da < db ? -1 : 1) : -1) : 1; // undated last
+      return CR.naturalCompare(CR.galleryTitle(a), CR.galleryTitle(b));
+    });
+  };
+
+  CR.seriesComics = function (seriesId) {
+    return CR.gql("query ($f: GalleryFilterType) { findGalleries(gallery_filter: $f, filter: {per_page: -1, sort: \"date\", direction: ASC}) { galleries { " +
+        CR.GALLERY_FIELDS + " } } }",
+      { f: { tags: { value: [String(seriesId)], modifier: "INCLUDES" } } })
+      .then(function (d) { return CR.seriesOrder(d.findGalleries.galleries); });
+  };
+
+  // Where "Continue" goes: the comic part-way through, else the first one
+  // not yet finished, else the first.
+  CR.continueTarget = function (comics) {
+    var list = comics || [];
+    for (var i = 0; i < list.length; i++) if (CR.progressOf(list[i]).page !== null) return list[i];
+    for (var j = 0; j < list.length; j++) if (!CR.progressOf(list[j]).finished) return list[j];
+    return list[0] || null;
+  };
+
+  // The existing series tag with this name (or alias), else a new one under
+  // Comic Series. A plain tag that already has the name is reused and put
+  // under Comic Series, because Stash won't allow a second tag of that name.
+  CR.ensureSeries = function (name) {
+    var want = String(name || "").trim();
+    if (!want) return Promise.reject(new Error("A series needs a name"));
+    return CR.tags().then(function (tags) {
+      return CR.gql("query ($q: String!) { findTags(filter: {q: $q, per_page: -1}) { tags { id name aliases parents { id } } } }", { q: want })
+        .then(function (d) {
+          var lower = want.toLowerCase();
+          var hit = d.findTags.tags.filter(function (t) {
+            return [t.name].concat(t.aliases || []).some(function (n) { return (n || "").toLowerCase() === lower; });
+          })[0];
+          if (!hit) {
+            return CR.gql("mutation ($i: TagCreateInput!) { tagCreate(input: $i) { id } }",
+              { i: { name: want, parent_ids: [tags.series], ignore_auto_tag: true } })
+              .then(function (r) { return String(r.tagCreate.id); });
+          }
+          var parents = (hit.parents || []).map(function (p) { return String(p.id); });
+          if (parents.indexOf(tags.series) >= 0) return String(hit.id);
+          return CR.gql("mutation ($i: TagUpdateInput!) { tagUpdate(input: $i) { id } }",
+            { i: { id: hit.id, parent_ids: parents.concat([tags.series]) } })
+            .then(function () { return String(hit.id); });
+        });
+    }).then(function (id) { CR.forgetSeries(); return id; });
+  };
+
+  // Put galleries in one series (out of any other), or out of every series
+  // when seriesId is null. Joining a series also adds Comic: the series tag
+  // alone would make it a comic, but a hide filter saved before this series
+  // existed lists the comic tags one by one and wouldn't know about it.
+  CR.setSeries = function (galleryIds, seriesId) {
+    var q = "mutation ($i: BulkGalleryUpdateInput!) { bulkGalleryUpdate(input: $i) { id } }";
+    return Promise.all([CR.tags(), CR.seriesList()]).then(function (r) {
+      var tags = r[0];
+      var others = r[1].map(function (s) { return s.id; }).filter(function (id) { return id !== seriesId; });
+      var steps = Promise.resolve();
+      if (others.length) {
+        steps = steps.then(function () {
+          return CR.gql(q, { i: { ids: galleryIds, tag_ids: { ids: others, mode: "REMOVE" } } });
+        });
+      }
+      if (seriesId) {
+        steps = steps.then(function () {
+          return CR.gql(q, { i: { ids: galleryIds, tag_ids: { ids: [seriesId, tags.comic], mode: "ADD" } } });
+        });
+      }
+      return steps;
+    });
   };
 
   // ------------------------------------------------------------ galleries
@@ -351,6 +519,7 @@
   CR.Boundary = Boundary;
 
   CR.readerPath = function (galleryId) { return CR.ROUTE + "/read/" + galleryId; };
+  CR.seriesPath = function (seriesId) { return CR.ROUTE + "/series" + (seriesId ? "/" + seriesId : ""); };
 
   // Per-viewer conveniences only (last page, spread preference). Storage can
   // be unavailable -- private windows, blocked site data -- so never rely on it.

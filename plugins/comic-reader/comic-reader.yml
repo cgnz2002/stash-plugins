@@ -1,6 +1,6 @@
 name: Comic Reader
 description: A comics section, reader and performer/studio Comics tabs for Stash. Galleries tagged Comic (or Webtoon) are read as side-by-side page spreads or a continuous webtoon scroll, and hidden from the Galleries and Images pages. .cbz files are marked as comics automatically.
-version: 0.3.0
+version: 0.4.0
 url: https://github.com/cgnz2002/stash-plugins
 
 settings:
@@ -15,6 +15,10 @@ settings:
   comicPageTagId:
     displayName: Comic Page Tag ID
     description: "Put on every image inside a comic, so the Images page can hide comic pages. Kept up to date by the plugin - you never need to add it yourself. Filled in automatically."
+    type: STRING
+  seriesTagId:
+    displayName: Comic Series Tag ID
+    description: "The parent of every series: each tag under it is a series, and its comics are the galleries tagged with it. A child of the Comic tag. Filled in automatically."
     type: STRING
   showComicsInLists:
     displayName: Show Comics in Galleries and Images
@@ -69,6 +73,7 @@ ui:
     - ui/info.js
     - ui/reader.js
     - ui/library.js
+    - ui/series.js
     - ui/builder.js
     - ui/inject.js
     - ui/main.js

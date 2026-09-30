@@ -102,6 +102,16 @@
       }));
   }
 
+  // "Next in <series>" on the end card, when there is a next one.
+  function NextUp(props) {
+    var s = props.series;
+    if (!s || !s.next) return null;
+    return h("div", { className: "cr-next" },
+      h("div", { className: "text-muted" }, "Next in " + s.series.name),
+      h(CR.Button, { variant: "primary", onClick: function () { props.onOpen(s.next.id); } },
+        CR.galleryTitle(s.next), " ", h(CR.Icon, { name: "faArrowRight" })));
+  }
+
   // ------------------------------------------------------------ pages view
 
   function PagesView(props) {
@@ -140,8 +150,9 @@
       body = h("div", { className: "cr-end-card", onClick: function (e) { e.stopPropagation(); } },
         h("h3", null, "The end"),
         h("p", { className: "text-muted" }, props.title),
+        h(NextUp, { series: props.series, onOpen: props.onOpen }),
         h("div", { className: "cr-end-actions" },
-          h(CR.Button, { variant: "primary", onClick: props.onExit }, "Back to comics"),
+          h(CR.Button, { variant: props.series && props.series.next ? "secondary" : "primary", onClick: props.onExit }, "Back to comics"),
           h(CR.Button, { variant: "secondary", onClick: function () { props.goTo(0); } }, "Read again")));
     } else {
       var spread = spreads[si];
@@ -214,13 +225,32 @@
         h("div", { className: "cr-end-card cr-scroll-end", onClick: function (e) { e.stopPropagation(); } },
           h("h3", null, "The end"),
           h("p", { className: "text-muted" }, props.title),
-          h(CR.Button, { variant: "primary", onClick: props.onExit }, "Back to comics"))));
+          h(NextUp, { series: props.series, onOpen: props.onOpen }),
+          h(CR.Button, { variant: props.series && props.series.next ? "secondary" : "primary", onClick: props.onExit }, "Back to comics"))));
   }
 
   // ---------------------------------------------------------------- reader
 
+  // The comic's series and where it sits in it, or null.
+  function loadSeries(gallery) {
+    if (!gallery) return Promise.resolve(null);
+    return CR.seriesList().then(function (list) {
+      var s = CR.seriesOf(gallery.tags, list);
+      if (!s) return null;
+      return CR.seriesComics(s.id).then(function (comics) {
+        var at = -1;
+        comics.forEach(function (c, i) { if (String(c.id) === String(gallery.id)) at = i; });
+        return { series: s, comics: comics, index: at,
+                 prev: at > 0 ? comics[at - 1] : null,
+                 next: at >= 0 && at + 1 < comics.length ? comics[at + 1] : null };
+      });
+    }).catch(function (e) { console.warn("[comic-reader] series lookup failed:", e); return null; });
+  }
+
   function Reader(props) {
     var galleryId = String(props.galleryId);
+    // Bumped when the comic's series changes from inside the reader.
+    var reload = React.useState(0);
     var data = CR.useAsync(function () {
       return Promise.all([
         CR.tags(),
@@ -228,8 +258,12 @@
           .then(function (d) { return d.findGallery; }),
         CR.fetchPages(galleryId),
         CR.family(),
-      ]).then(function (r) { return { tags: r[0], gallery: r[1], pages: r[2], family: r[3] }; });
-    }, [galleryId]);
+      ]).then(function (r) {
+        return loadSeries(r[1]).then(function (series) {
+          return { tags: r[0], gallery: r[1], pages: r[2], family: r[3], series: series };
+        });
+      });
+    }, [galleryId, reload[0]]);
 
     var viewport = useViewport();
     var chrome = useChrome();
@@ -279,11 +313,18 @@
     var double = spreadPref[0] === "double" || (spreadPref[0] === "auto" && landscape);
     var spreads = React.useMemo(function () { return buildSpreads(pages, double); }, [pages, double]);
 
-    // Resume where this browser left off (0 on a first read).
+    // Resume from the page saved on the gallery (the same on every device).
+    // A comic never read since progress started syncing falls back to the
+    // page this browser remembered locally, the way 0.3 and earlier saved it.
+    var opened = React.useRef(null);
     React.useEffect(function () {
-      if (!d) return;
-      var saved = CR.store.get("page:" + galleryId, 0);
-      pos[1](saved > 0 && saved < pages.length ? saved : 0);
+      if (!d || !gallery || pos[0] !== null) return;
+      var prog = CR.progressOf(gallery);
+      var p = prog.page;
+      if (p === null && !prog.readAt && !prog.finished) p = CR.store.get("page:" + galleryId, 0);
+      if (!(p > 0 && p < pages.length)) p = 0;
+      opened.current = p;
+      pos[1](p);
     }, [d]);
 
     var page = typeof pos[0] === "number" ? pos[0] : (pos[0] === "end" ? Math.max(0, pages.length - 1) : 0);
@@ -296,11 +337,48 @@
       if (ok) CR.runOperation({ mode: "pages", galleryId: galleryId }).catch(function () {});
     }, [ok, galleryId]);
 
-    // Remember the page; finishing a comic means the next read starts over.
+    // Save progress to the gallery: a moment after the page stops changing,
+    // at once on reaching the end (finished, so the next read starts over),
+    // and whatever is still pending when the reader closes or the tab hides.
+    // Opening a comic and closing it again saves nothing.
+    var pending = React.useRef(null);
+    var saveTimer = React.useRef(null);
+    var total = pages.length;
+    var flush = React.useCallback(function () {
+      clearTimeout(saveTimer.current);
+      var p = pending.current;
+      if (p === null) return;
+      pending.current = null;
+      CR.store.set("page:" + galleryId, 0); // the gallery holds it now
+      CR.saveProgress(galleryId, p, total).catch(function (e) {
+        console.warn("[comic-reader] couldn't save reading progress:", e);
+      });
+    }, [galleryId, total]);
     React.useEffect(function () {
       if (!d || pos[0] === null) return;
-      CR.store.set("page:" + galleryId, pos[0] === "end" ? 0 : pos[0]);
+      if (opened.current !== undefined && pos[0] === opened.current) return;
+      opened.current = undefined; // once moved, every page counts, even the first
+      pending.current = pos[0];
+      clearTimeout(saveTimer.current);
+      if (pos[0] === "end") flush();
+      else saveTimer.current = setTimeout(flush, 1500);
     }, [pos[0]]);
+    React.useEffect(function () {
+      function onHide() { if (document.visibilityState === "hidden") flush(); }
+      document.addEventListener("visibilitychange", onHide);
+      return function () { document.removeEventListener("visibilitychange", onHide); flush(); };
+    }, [flush]);
+
+    // Next / previous in the series replace this reader in the history, so
+    // Back still returns to wherever the comic was first opened from.
+    var openComic = React.useCallback(function (id) {
+      flush();
+      var to = CR.readerPath(id);
+      var st = (props.history && props.history.location && props.history.location.state) || { cr: true };
+      if (props.history) props.history.replace(to, st);
+      else window.location.assign(to);
+    }, [flush, props.history]);
+    var series = d ? d.series : null;
 
     var exit = React.useCallback(function () {
       if (props.onExit) props.onExit();
@@ -335,6 +413,10 @@
     React.useEffect(function () {
       function onKey(e) {
         if (e.target && /input|textarea|select/i.test(e.target.tagName)) return;
+        // A dialog over the reader (Add to series) owns the keyboard: its Esc
+        // closes it, and must not close the reader behind it too.
+        if (document.body.classList.contains("modal-open") ||
+            (e.target && e.target.closest && e.target.closest(".modal"))) return;
         // Alt+Left is the browser's Back, Ctrl+F is find: not page turns.
         if (e.ctrlKey || e.metaKey || e.altKey) return;
         if (e.key === "Escape") {
@@ -480,6 +562,8 @@
           gallery: gallery, family: d.family, pages: pages.length, layout: layout,
           history: props.history, docked: docked, onClose: toggleInfo,
           onRated: function (v) { gallery.rating100 = v; },
+          series: series, onOpen: openComic,
+          onSeriesChanged: function () { reload[1](function (n) { return n + 1; }); },
         }));
       if (!docked) info = h(React.Fragment, null, h("div", { className: "cr-info-backdrop", onClick: toggleInfo }), info);
     }
@@ -488,9 +572,10 @@
                       onPointerMove: function (e) { if (e.pointerType === "mouse") chrome.show(); } },
       layout === "pages"
         ? h(PagesView, { pages: pages, spreads: spreads, spreadIndex: spreadIndex, go: go, goTo: goTo,
-                         chrome: chrome, title: title, onExit: exit })
+                         chrome: chrome, title: title, onExit: exit, series: series, onOpen: openComic })
         : h(ScrollView, { key: "scroll-" + galleryId, pages: pages, width: stripWidth[0],
                           startPage: page, chrome: chrome, title: title, onExit: exit,
+                          series: series, onOpen: openComic,
                           onPage: function (p, frac) {
                             scrollProgress[1](frac);
                             // At the very bottom it counts as finished, so the next read starts over.

@@ -54,7 +54,35 @@ per page, the **…** menu, zoom and selection. Its default filter is its own,
 separate from the Galleries page. Each comic shows as a portrait cover with
 its page count, a **Webtoon** badge where it applies and a **Read** (or
 **Continue**) button on hover. The bar under a cover shows how far you have
-read in this browser.
+read, a **Read** badge marks one you finished, and **3 new** marks pages added
+since you last read it.
+
+**Continue reading.** The comics you are part-way through sit in a row at the
+top of the Comics page, most recent first.
+
+**Your place is saved on the comic itself**, so it is the same on your phone,
+tablet and computer. It is stored in the gallery's custom fields, where you
+can see it in Stash: `comic_page` (the page you're on), `comic_finished`,
+`comic_read_at` and `comic_seen` (how many pages it had then). Saving it
+updates the gallery's **Updated** date, so sorting Galleries by Updated puts
+recently read comics first.
+
+**Series.** A series ties comics together in release order (by date, then
+title), whether a creator posts a chapter per post (each chapter is its own
+gallery) or keeps adding pages to one comic.
+
+- Put a comic in a series from the reader's details panel, from its gallery
+  page (**Add to series**), or by selecting comics on the Comics page and
+  choosing **… → Add to series**. Type a new name or pick an existing one.
+- The **Series** tab lists every series, the ones you read most recently
+  first, with how many of each you have read.
+- A series' page has a **Continue** button (the comic you are part-way
+  through, else the next one you haven't finished) and the series' comics,
+  oldest first. Its sort and filters are Stash's, with their own default.
+- At the end of a comic, **Next in** *series* opens the next one. The details
+  panel has **Previous** and **Next** too.
+- A series is a tag under `Comic Series`, so **Edit series in Stash** (the tag
+  page) is where you rename it or give it a cover image or description.
 
 **Performer and studio pages.** Performers and studios with comics get a
 **Comics** tab, with the same list. A parent studio, such as your Patreon
@@ -121,6 +149,7 @@ Everything is plain Stash tags, so you can see and edit it:
 | `Comic` | this gallery is a comic |
 | `Webtoon` | (under `Comic`) read it as a scroll |
 | `Comic Page` | (under `Comic`) this image is a page of a comic. The plugin keeps this one up to date, so you never need to add it. |
+| `Comic Series` | (under `Comic`) each tag under it is a series; its comics are the galleries tagged with it |
 
 `Webtoon` and `Comic Page` sit under `Comic`, so tagging a gallery `Webtoon`
 alone is enough, and one filter rule ("tags exclude Comic, including sub-tags")
@@ -139,7 +168,7 @@ rest of each filter is left as you set it.
 
 | Setting | |
 |---|---|
-| Comic Tag ID / Webtoon Tag ID / Comic Page Tag ID | Filled in automatically. Change them only to point the plugin at different tags. |
+| Comic Tag ID / Webtoon Tag ID / Comic Page Tag ID / Comic Series Tag ID | Filled in automatically. Change them only to point the plugin at different tags. |
 | Show Comics in Galleries and Images | Off by default: comics leave those pages. The Hide/Show tasks switch it and apply it at once; if you change it here, run Set Up Comics. |
 | Webtoon Page Ratio | How tall a page must be, as a multiple of its width, before an untagged comic auto-opens as a scroll. Default 2. |
 
