@@ -188,6 +188,7 @@ class StashClient:
                 findScenes(scene_filter: $f, filter: { per_page: -1 }) {
                     scenes {
                         id title organized urls director details date code
+                        stash_ids { stash_id endpoint }
                         tags { id name } performers { id name }
                         studio { id name }
                         files { path }

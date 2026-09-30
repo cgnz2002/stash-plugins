@@ -236,6 +236,44 @@ assert "scene-yours" not in touched
 P.parent_id = None
 
 
+# --- a stash-box id makes it somebody else's work ---------------------------
+# Scene 111530 in a real library: a torrented OnlyFans scene the user matched
+# to FansDB. The scrape gave it onlyfans.com/1026372101/onlydurden and a studio
+# named "onlydurden (OnlyFans)" -- the same shape this plugin writes, so the
+# URL cannot tell them apart. The stash-box id can: this plugin never sets one.
+scraped = {"id": "111530",
+           "title": "Have you guys seen this episode of Spider-Man",
+           "organized": True,
+           "urls": ["https://onlyfans.com/1026372101/onlydurden"],
+           "tags": [{"id": "t1", "name": "Anal"}],
+           "performers": [{"id": "p1", "name": "Rusty Taylor"}],
+           "studio": {"id": "s1", "name": "onlydurden (OnlyFans)"},
+           "stash_ids": [{"stash_id": "da767a76-7836-4cbf-a2ba-1f97331db33e",
+                          "endpoint": "https://fansdb.cc/graphql"}],
+           "files": [{"path": TORRENT}]}
+assert sync.plugin_wrote_this(scraped, OF) is False
+
+# the identical scene WITHOUT a stash-box id is the plugin's to revert
+assert sync.plugin_wrote_this(dict(scraped, stash_ids=[]), OF) is True
+assert sync.plugin_wrote_this(
+    {k: v for k, v in scraped.items() if k != "stash_ids"}, OF) is True
+
+# and the pass acts on that. Run under the OnlyFans profile, since that is the
+# domain these URLs carry -- a Patreon profile would reject both on the URL.
+OF.parent_id = "parentOF"
+c = FakeClient({"scene": [scraped, dict(scraped, id="no-id", stash_ids=[])],
+                "image": []})
+sync.cleanup_stray_media(c, [(OF, "/data/media/OnlyFans")], None, 1,
+                         {"scenes": 0, "images": 0, "galleries": 0,
+                          "skipped": 0, "skipped_multifile": 0})
+assert [u["id"] for _k, u in c.updated] == ["no-id"], c.updated
+OF.parent_id = None
+
+# the query has to ask for the field, or every scene looks unidentified
+assert "stash_ids { stash_id endpoint }" in open(
+    plugin_file("stash.py"), encoding="utf-8").read()
+
+
 # --- the tasks exist, and the preview is a dry run --------------------------
 manifest = open(plugin_file("of-stash-sync.yml"), encoding="utf-8").read()
 assert "mode: cleanup" in manifest
