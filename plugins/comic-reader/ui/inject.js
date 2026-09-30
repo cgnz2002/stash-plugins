@@ -157,8 +157,8 @@
     return h(React.Fragment, null,
       ReactDOM.createPortal(h(React.Fragment, null, "Comics",
         count[0] ? h("span", { className: "left-spacing badge badge-pill badge-secondary" }, count[0]) : null), els.link),
-      on ? ReactDOM.createPortal(h(CR.ComicGrid, {
-        history: props.history, filter: tabFilter(ctx), storeKey: "tab", defaultGroup: "none",
+      on ? ReactDOM.createPortal(h(CR.ComicsList, {
+        history: props.history, extra: tabFilter(ctx), view: ctx.kind + "_comics", alterQuery: false,
       }), els.pane) : null);
   }
 

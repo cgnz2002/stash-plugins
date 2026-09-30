@@ -159,6 +159,26 @@
     return h(Nav.Link, { eventKey: CR.ROUTE, as: "div", className: "col-4 col-sm-3 col-md-2 col-lg-auto" }, link);
   }
 
+  // Inside a Comics list (CR.ComicsContext) the gallery card grid renders
+  // comic cards; everywhere else it is untouched -- `next` gets exactly the
+  // arguments Stash passed. useContext is called on every render, so the
+  // patched component's hook order never changes.
+  // Stash's own grid as a component, for the error fallback -- built lazily,
+  // never by calling `next` up front (that would run its hooks in ours).
+  function StockGrid(p) { return p.next.apply(null, p.args); }
+  try {
+    api.patch.instead("GalleryCardGrid", function () {
+      var args = Array.prototype.slice.call(arguments);
+      var next = args.pop();
+      var inComics = React.useContext(CR.ComicsContext);
+      if (!inComics || !CR.ComicCardGrid) return next.apply(this, args);
+      return h(CR.Boundary, { name: "comic cards", fallback: h(StockGrid, { next: next, args: args }) },
+        h(CR.ComicCardGrid, args[0]));
+    });
+  } catch (e) {
+    console.error("[comic-reader] could not add comic cards:", e);
+  }
+
   // The menu is mounted on every page and sits inside Stash's router, so it
   // is also where the page injector lives: it watches navigation and portals
   // the performer/studio Comics tab and the gallery-page buttons in. (Not
