@@ -910,6 +910,17 @@ def plugin_wrote_this(item, source):
     metadata until someone fixes it by hand, while a false positive destroys
     curation that cannot be recovered.
     """
+    # A stash-box id means a scraper identified this, and scrapers write the
+    # same shape of post URL the plugin does -- a FansDB match on a torrented
+    # OnlyFans scene carries onlyfans.com/<postid>/<handle> and a
+    # "<creator> (OnlyFans)" studio, indistinguishable from our own work. The
+    # id is not: this plugin never sets one. Whatever else is on that media,
+    # somebody identified it deliberately, so it is not ours to revert.
+    # (Images have no stash_ids field in the Stash schema, so this only ever
+    # applies to scenes.)
+    if item.get("stash_ids"):
+        return False
+
     for url in item.get("urls") or []:
         if source.link_domain and source.link_domain in (url or ""):
             return True
