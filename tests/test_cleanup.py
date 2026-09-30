@@ -160,9 +160,8 @@ assert totals["images"] == 1, totals
 # handle matched a path the user doesn't recognise, which is the only thing
 # that explains why the file was touched at all.
 src = open(plugin_file("sync.py"), encoding="utf-8").read()
-assert "Stray media by creator" in src
-assert "by_creator[studio_name]" in src
-assert "studio_name or \"no studio\"" in src
+assert "def plugin_wrote_this" in src
+assert "plugin_wrote_this(item, source)" in src
 
 # no parent studio resolved -> the plugin can't identify its own writes, so it
 # does nothing rather than guessing
@@ -177,6 +176,64 @@ P.parent_id = None
 c3 = FakeClient({"image": [STRAY], "scene": []})
 sync.cleanup_stray_media(c3, [(P, "")], None, 1, dict(totals))
 assert c3.updated == [], c3.updated
+
+
+# --- a studio under the parent is NOT evidence the plugin wrote it ----------
+# Observed in a real library: the user had filed their OWN studios under
+# "OnlyFans (network)" -- ZacknRhys, Gang Bang Guys, Juice Anime and more,
+# holding hand-curated torrented media this plugin never touched. Selecting on
+# the studio tree alone swept 250+ of those into the cleanup, which would have
+# stripped titles, dates, tags and the organized flag from media whose only
+# sin was being filed sensibly.
+OF = sources.ONLYFANS
+
+# The user's own: a studio under the parent, and nothing else of ours.
+theirs = {"id": "91394", "title": "SEND ME STARS 7", "organized": True,
+          "urls": [], "tags": [{"id": "t9", "name": "anime"}],
+          "performers": [], "studio": {"id": "s9", "name": "Juice Anime"},
+          "files": [{"path": "/torrents/downloads/prowlarr/Juice Anime "
+                             "Patreon Collection/Juice Anime 3/x.mp4"}]}
+assert sync.plugin_wrote_this(theirs, OF) is False
+assert sync.plugin_wrote_this(theirs, P) is False
+
+# even media filed directly under the parent studio itself
+parent_filed = dict(theirs, id="p1", studio={"id": "s0", "name": "OnlyFans (network)"})
+assert sync.plugin_wrote_this(parent_filed, OF) is False
+
+# --- the plugin's own fingerprint DOES qualify ------------------------------
+# build_update always writes the site tag, and a post URL when one exists.
+by_url = dict(theirs, id="u1",
+              urls=["https://www.patreon.com/Mirenac/posts/priest-123"])
+assert sync.plugin_wrote_this(by_url, P) is True
+# ...but that URL is Patreon's, so it is not evidence for OnlyFans
+assert sync.plugin_wrote_this(by_url, OF) is False
+
+# The site TAG is deliberately not enough. Torrented OnlyFans content filed
+# under "<creator> (OnlyFans)" may reasonably be tagged "OnlyFans" too -- and
+# those studios really are OnlyFans creators, so neither the studio name nor
+# the tag separates the user's work from the plugin's.
+by_tag = dict(theirs, id="t1", tags=[{"id": "t1", "name": "Patreon"},
+                                     {"id": "t9", "name": "anime"}])
+assert sync.plugin_wrote_this(by_tag, P) is False
+assert sync.plugin_wrote_this(by_tag, OF) is False
+
+# --- and the pass acts on that, not on the studio ---------------------------
+mine = dict(STRAY, id="img-ours")          # has a patreon.com url and site tag
+yours = {"id": "scene-yours", "title": "Keep me", "organized": True,
+         "urls": [], "tags": [{"id": "t9", "name": "anime"}], "performers": [],
+         "details": "mine", "date": "2020-01-01", "code": "",
+         "studio": {"id": "s9", "name": "Juice Anime"},
+         "visual_files": [{"path": TORRENT}]}
+
+P.parent_id = "parent1"
+client = FakeClient({"image": [mine, yours], "scene": []})
+totals2 = {"scenes": 0, "images": 0, "galleries": 0, "skipped": 0,
+           "skipped_multifile": 0}
+sync.cleanup_stray_media(client, [(P, "/data/media/Patreon")], None, 1, totals2)
+touched = [u["id"] for _k, u in client.updated]
+assert touched == ["img-ours"], touched
+assert "scene-yours" not in touched
+P.parent_id = None
 
 
 # --- the tasks exist, and the preview is a dry run --------------------------
