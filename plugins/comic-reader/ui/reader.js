@@ -23,6 +23,16 @@
   // image viewer restyles the reader too.
   var ROOT = "Lightbox cr-reader";
 
+  // The details panel docks beside the pages on screens wide enough to keep
+  // a readable page next to it, and is a bottom sheet over the page below
+  // that. Keep INFO_W in step with --cr-info-w in comics.css.
+  var INFO_W = 340;
+  var DOCK_MIN = 768;
+
+  // The list's fields plus what the details panel shows.
+  var READER_FIELDS = CR.GALLERY_FIELDS.replace("performers { id name }",
+    "performers { id name disambiguation image_path }") + " details rating100 urls";
+
   function isWide(p) { return p.width > 0 && p.width > p.height * 1.1; }
 
   function buildSpreads(pages, double) {
@@ -102,7 +112,9 @@
     var touch = React.useRef(null);
 
     function onClick(e) {
-      var x = e.clientX / window.innerWidth;
+      // Relative to the stage, which the docked details panel narrows.
+      var r = e.currentTarget.getBoundingClientRect();
+      var x = (e.clientX - r.left) / Math.max(1, r.width);
       if (x < 0.3) props.go(-1);
       else if (x > 0.7) props.go(1);
       else props.chrome.toggle();
@@ -212,10 +224,11 @@
     var data = CR.useAsync(function () {
       return Promise.all([
         CR.tags(),
-        CR.gql("query ($id: ID!) { findGallery(id: $id) { " + CR.GALLERY_FIELDS + " } }", { id: galleryId })
+        CR.gql("query ($id: ID!) { findGallery(id: $id) { " + READER_FIELDS + " } }", { id: galleryId })
           .then(function (d) { return d.findGallery; }),
         CR.fetchPages(galleryId),
-      ]).then(function (r) { return { tags: r[0], gallery: r[1], pages: r[2] }; });
+        CR.family(),
+      ]).then(function (r) { return { tags: r[0], gallery: r[1], pages: r[2], family: r[3] }; });
     }, [galleryId]);
 
     var viewport = useViewport();
@@ -227,6 +240,19 @@
     var scrollProgress = React.useState(0);
     var toast = CR.useToast();
     var rootRef = React.useRef(null);
+    // Details: docked, it stays as the user last left it (open the first
+    // time); as a sheet on a phone it would cover the page, so it starts shut.
+    var docked = viewport.w >= DOCK_MIN;
+    var infoPref = React.useState(CR.store.get("info", true));
+    var sheetOpen = React.useState(false);
+    var infoOpen = docked ? infoPref[0] : sheetOpen[0];
+    var toggleInfo = React.useCallback(function () {
+      if (docked) {
+        infoPref[1](function (v) { CR.store.set("info", !v); return !v; });
+      } else {
+        sheetOpen[1](function (v) { return !v; });
+      }
+    }, [docked]);
 
     // The reader covers the whole window; stop the page behind it scrolling.
     React.useEffect(function () {
@@ -248,7 +274,8 @@
     var pinnedPages = ok ? ((gallery.custom_fields || {}).comic_layout === "pages") : false;
     var layout = layoutOverride[0] || (tagged ? "scroll" : (detected && !pinnedPages ? "scroll" : "pages"));
 
-    var landscape = viewport.w >= viewport.h * 1.05 && viewport.w >= 900;
+    var stageW = viewport.w - (docked && infoOpen ? INFO_W : 0);
+    var landscape = stageW >= viewport.h * 1.05 && stageW >= 900;
     var double = spreadPref[0] === "double" || (spreadPref[0] === "auto" && landscape);
     var spreads = React.useMemo(function () { return buildSpreads(pages, double); }, [pages, double]);
 
@@ -310,9 +337,16 @@
         if (e.target && /input|textarea|select/i.test(e.target.tagName)) return;
         // Alt+Left is the browser's Back, Ctrl+F is find: not page turns.
         if (e.ctrlKey || e.metaKey || e.altKey) return;
-        if (e.key === "Escape") { exit(); return; }
+        if (e.key === "Escape") {
+          // An open sheet closes first; the docked panel is part of the page.
+          if (!docked && infoOpen) toggleInfo(); else exit();
+          return;
+        }
         if (e.key === "f") { toggleFullscreen(); return; }
+        if (e.key === "i") { toggleInfo(); return; }
         if (layout !== "pages") return; // the scroll strip scrolls natively
+        // Space on a focused rating star rates; it doesn't turn the page.
+        if (e.target && e.target.closest && e.target.closest(".cr-info")) return;
         var k = e.key;
         if (k === "ArrowRight" || k === "PageDown" || k === " " || k === "d") { e.preventDefault(); go(1); }
         else if (k === "ArrowLeft" || k === "PageUp" || k === "a") { e.preventDefault(); go(-1); }
@@ -325,7 +359,7 @@
       }
       window.addEventListener("keydown", onKey);
       return function () { window.removeEventListener("keydown", onKey); };
-    }, [go, layout, exit]);
+    }, [go, layout, exit, docked, infoOpen, toggleInfo]);
 
     function toggleFullscreen() {
       var el = rootRef.current;
@@ -414,6 +448,9 @@
                             onClick: function () { changeWidth(-100); } }, "−"),
               h("button", { type: "button", className: "btn btn-secondary", title: "Wider",
                             onClick: function () { changeWidth(100); } }, "+")),
+        h("button", { type: "button", className: "btn btn-secondary btn-sm" + (infoOpen ? " active" : ""),
+                      title: infoOpen ? "Hide details (I)" : "Details (I)", "aria-pressed": infoOpen,
+                      onClick: toggleInfo }, h(CR.Icon, { name: "faCircleInfo" })),
         h("button", { type: "button", className: "btn btn-secondary btn-sm", title: "Full screen (F)",
                       onClick: toggleFullscreen }, h(CR.Icon, { name: "faExpand" })),
         h("a", { className: "btn btn-secondary btn-sm", title: "Open the gallery in Stash",
@@ -423,7 +460,8 @@
                  } }, h(CR.Icon, { name: "faImages" }))));
 
     var bottom = layout === "pages"
-      ? h("div", { className: "cr-bar cr-bar-bottom" + (chrome.visible ? "" : " cr-hidden"),
+      // (Tucked away under an open details sheet, which covers that edge.)
+      ? h("div", { className: "cr-bar cr-bar-bottom" + (chrome.visible && (docked || !infoOpen) ? "" : " cr-hidden"),
                    onClick: function (e) { e.stopPropagation(); } },
           h("input", {
             type: "range", className: "cr-slider", min: 0, max: spreads.length - 1,
@@ -435,7 +473,18 @@
     // Only a real mouse wakes the toolbars on movement: Android sends a
     // synthetic mousemove before every tap, which would show the bars just as
     // the tap's own toggle hides them again.
-    return h("div", { className: ROOT, ref: rootRef,
+    var info = null;
+    if (infoOpen && CR.ComicInfo) {
+      info = h(CR.Boundary, { name: "comic details" },
+        h(CR.ComicInfo, {
+          gallery: gallery, family: d.family, pages: pages.length, layout: layout,
+          history: props.history, docked: docked, onClose: toggleInfo,
+          onRated: function (v) { gallery.rating100 = v; },
+        }));
+      if (!docked) info = h(React.Fragment, null, h("div", { className: "cr-info-backdrop", onClick: toggleInfo }), info);
+    }
+
+    return h("div", { className: ROOT + (docked && infoOpen ? " cr-with-info" : ""), ref: rootRef,
                       onPointerMove: function (e) { if (e.pointerType === "mouse") chrome.show(); } },
       layout === "pages"
         ? h(PagesView, { pages: pages, spreads: spreads, spreadIndex: spreadIndex, go: go, goTo: goTo,
@@ -449,7 +498,8 @@
                             if (next !== pos[0]) pos[1](next);
                           } }),
       topBar,
-      bottom);
+      bottom,
+      info);
   }
 
   CR.Reader = Reader;
