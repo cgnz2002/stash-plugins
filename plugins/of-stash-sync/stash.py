@@ -162,6 +162,49 @@ class StashClient:
 
     # ----- tags ----------------------------------------------------------
 
+    def find_media_under_studio(self, studio_id, kind):
+        """Every scene or image whose studio is `studio_id` or beneath it.
+
+        Used by the cleanup pass to find media this plugin stamped: a studio
+        under the site's parent studio is something only this plugin creates, so
+        it identifies the plugin's own writes without guessing.
+        """
+        if kind == "scene":
+            query = """
+            query FindScenes($f: SceneFilterType!) {
+                findScenes(scene_filter: $f, filter: { per_page: -1 }) {
+                    scenes {
+                        id title organized urls director
+                        tags { id name } performers { id name }
+                        studio { id name }
+                        files { path }
+                    }
+                }
+            }
+            """
+            key, plural = "findScenes", "scenes"
+        else:
+            query = """
+            query FindImages($f: ImageFilterType!) {
+                findImages(image_filter: $f, filter: { per_page: -1 }) {
+                    images {
+                        id title organized urls photographer
+                        tags { id name } performers { id name }
+                        studio { id name }
+                        visual_files {
+                            ... on VideoFile { path }
+                            ... on ImageFile { path }
+                        }
+                    }
+                }
+            }
+            """
+            key, plural = "findImages", "images"
+        variables = {"f": {"studios": {
+            "value": [studio_id], "modifier": "INCLUDES", "depth": -1,
+        }}}
+        return self.call(query, variables)[key][plural]
+
     def find_tag_descendants(self, tag_id):
         """Ids of every tag beneath `tag_id`, at any depth (excluding itself).
 

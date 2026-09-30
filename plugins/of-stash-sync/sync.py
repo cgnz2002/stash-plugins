@@ -866,6 +866,135 @@ def _gallery_meta(db, processor, profile, post_id, group, performers, tags,
     return gallery_input, title, sponsor_ids
 
 
+def is_outside(paths, roots):
+    """True when none of `paths` sits under any of `roots`.
+
+    Media with no path at all is treated as inside, i.e. left alone: the
+    cleanup pass only ever acts on media it can positively place OUTSIDE the
+    configured libraries.
+    """
+    if not paths or not roots:
+        return False
+    # Stripped, because a whitespace-only setting would otherwise normalise to a
+    # prefix nothing matches -- making the whole library look "outside" and
+    # eligible for cleanup.
+    prefixes = [os.path.normpath(r.strip()) + os.sep
+                for r in roots if r and r.strip()]
+    if not prefixes:
+        return False
+    return not any(
+        (os.path.normpath(p) + os.sep).startswith(prefix)
+        for p in paths for prefix in prefixes
+    )
+
+
+def build_cleanup_update(item, kind, source, username, tags):
+    """Undo what a stray sync wrote onto one media, or None if nothing to undo.
+
+    These are files OUTSIDE every configured data path that nevertheless carry
+    one of this plugin's studios -- media the plugin reached through Stash's
+    substring path filter and had no business touching (see
+    media_under_data_path). It wrote a title, details, date, code, studio, the
+    creator performer, its tags, a post URL and `organized: True` over whatever
+    was there.
+
+    The originals are gone, so this clears those fields rather than restoring
+    them. Clearing is the useful direction anyway: Stash falls back to the
+    filename for an empty title, and `organized: False` puts the media back in
+    whatever "not yet sorted" workflow it came from. Fields this plugin never
+    writes are not touched.
+    """
+    update = {"id": item["id"]}
+
+    if item.get("studio"):
+        update["studio_id"] = None
+    if item.get("title"):
+        update["title"] = ""
+    if item.get("organized"):
+        update["organized"] = False
+    update["details"] = ""
+    update["date"] = None
+    update["code"] = ""
+
+    # Only the URLs pointing at this site; anything else on the media is not
+    # ours and stays.
+    urls = [u for u in (item.get("urls") or [])
+            if source.link_domain not in (u or "")]
+    if len(urls) != len(item.get("urls") or []):
+        update["urls"] = urls
+
+    # The creator performer, identified from the studio name this plugin built
+    # ("<username> (Patreon)"), so only that one is dropped.
+    target = (username or "").strip().lower()
+    performers = [p for p in (item.get("performers") or [])
+                  if (p.get("name") or "").strip().lower() != target]
+    if len(performers) != len(item.get("performers") or []):
+        update["performer_ids"] = [p["id"] for p in performers]
+
+    # The plugin's own tags. Matched by NAME here rather than by resolving them
+    # -- a cleanup should not create a tag it is trying to remove.
+    plugin_tags = {source.site_tag.strip().lower(), SPONSORED_TAG,
+                   "paid", "archived", "pinned"}
+    kept = [t for t in (item.get("tags") or [])
+            if (t.get("name") or "").strip().lower() not in plugin_tags]
+    if len(kept) != len(item.get("tags") or []):
+        update["tag_ids"] = [t["id"] for t in kept]
+
+    credit = "director" if kind == "scene" else "photographer"
+    if item.get(credit):
+        update[credit] = ""
+
+    return update
+
+
+def cleanup_stray_media(client, configured, tags, workers, totals):
+    """Undo metadata written onto media outside every configured data path.
+
+    The damage this repairs was caused by Stash's `path` filter being a
+    SUBSTRING match over the whole library: a creator name occurring anywhere
+    else in the library pulled unrelated files into that creator's sync. The
+    guard is now in media_under_data_path, but nothing re-derives media the
+    plugin has stopped being able to see, so the writes it already made have to
+    be undone deliberately.
+
+    Runs under the normal dry-run chokepoint, so the preview task lists exactly
+    what it would change without writing.
+    """
+    roots = [p for _s, p in configured if p]
+    if not roots:
+        log.LogError("No data paths configured; nothing to compare against")
+        return
+    log.LogInfo("Looking for stray media outside: {}".format(", ".join(roots)))
+
+    tasks = []
+    for source, _path in configured:
+        if not source.parent_id:
+            continue
+        for kind in ("scene", "image"):
+            try:
+                items = client.find_media_under_studio(source.parent_id, kind)
+            except RuntimeError as e:
+                log.LogWarning("Could not list {}s for {}: {}".format(
+                    kind, source.label, e))
+                continue
+            for item in items:
+                if not is_outside(_media_paths(item), roots):
+                    continue
+                studio_name = ((item.get("studio") or {}).get("name") or "")
+                username = studio_name.split(" (")[0]
+                update = build_cleanup_update(item, kind, source, username, tags)
+                paths = _media_paths(item)
+                log.LogInfo("  Stray {} {}: {}".format(
+                    kind, item["id"], paths[0] if paths else "(no path)"))
+                tasks.append(_media_task(client, kind, update))
+
+    if not tasks:
+        log.LogInfo("No stray media found.")
+        return
+    log.LogInfo("{} stray item(s) to clean up".format(len(tasks)))
+    run_writes(tasks, workers, totals)
+
+
 def _media_paths(item):
     """Every file path of a scene or image, whichever shape Stash returned."""
     paths = [f.get("path") for f in (item.get("files") or [])]
@@ -1668,6 +1797,11 @@ def main():
     full_sync = mode == "full" or performer_scope
     tag_only = mode == "tag"
     crew_only = mode == "crew"
+    # A repair pass, not a sync: it walks media the plugin already stamped and
+    # undoes what it wrote OUTSIDE the configured libraries. It needs the parent
+    # studios resolved (that is how it finds the plugin's own writes) but no
+    # library discovery at all, so it returns before that loop.
+    cleanup_only = mode == "cleanup"
 
     # Dry run comes from either the task ("Preview") or the setting, so a one-off
     # preview never needs the setting toggled and back. The plugin config is read
@@ -1845,6 +1979,18 @@ def main():
                     log.LogError(msg)
                     return msg
                 log.LogInfo("Created parent studio '{}'".format(name))
+
+    if cleanup_only:
+        totals = {"scenes": 0, "images": 0, "galleries": 0, "skipped": 0,
+                  "skipped_multifile": 0}
+        cleanup_stray_media(client, configured_sources, None, workers, totals)
+        log.LogProgress(1.0)
+        summary = "Cleanup complete. Items reverted: {}".format(
+            totals["scenes"] + totals["images"])
+        if dry_run:
+            summary += " (dry run -- nothing was written)"
+        log.LogInfo(summary)
+        return None
 
     # Discover every library once, remembering the site whose path found it, so
     # one is never scanned twice when two sites share a parent directory.
