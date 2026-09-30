@@ -12,39 +12,63 @@
 .cr-library {
   padding-top: 0.5rem;
 }
-.cr-group {
-  margin-bottom: 1rem;
-}
-.cr-group-title {
-  margin: 0.75rem 15px 0.5rem;
-}
-.cr-group-title a {
-  color: inherit;
-}
 .cr-empty,
 .cr-loading {
   padding: 2rem 1rem;
   text-align: center;
 }
 
-/* Comic covers are portrait: keep the card's image box 2:3 at every zoom
-   level instead of Stash's fixed landscape-gallery heights. */
-.gallery-card.cr-comic-card .gallery-card-image {
-  width: 100%;
+/* Comic cards: Stash's gallery card with a portrait cover, 2:3 at every
+   zoom level. Themes size gallery-card images for landscape (refract forces
+   the header to 4:3 and clips it), so these selectors are one class more
+   specific than a theme's `body.x .gallery-card .gallery-card-header`: a
+   portrait cover is the point of a comic card. */
+.cr-comic-card.gallery-card .thumbnail-section .gallery-card-header {
+  display: block;
   height: auto;
   aspect-ratio: 2 / 3;
+  overflow: hidden;
+}
+.cr-cover {
+  position: relative;
+  display: block;
+  height: 100%;
+}
+.cr-comic-card.gallery-card .cr-cover .cr-cover-img {
+  display: block;
+  width: 100%;
+  height: 100%;
   object-fit: cover;
   object-position: top;
 }
-.cr-comic-card .thumbnail-section {
-  position: relative;
-}
-.cr-format-badge {
+/* Bottom corner, where a scene card keeps its duration; the top corners
+   belong to Stash's selection checkbox, rating banner and studio logo. */
+.cr-cover-badges {
   position: absolute;
-  top: 0.7rem;
-  left: 0.7rem;
-  z-index: 2;
+  right: 0.5rem;
+  bottom: 0.6rem;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.25rem;
+  pointer-events: none;
 }
+.cr-cover-read {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.15s ease-in-out;
+  pointer-events: none;
+}
+.cr-comic-card:hover .cr-cover-read,
+.cr-comic-card:focus-within .cr-cover-read {
+  opacity: 1;
+}
+/* On touch screens there is no hover, and none is needed: the whole cover
+   opens the reader, and the card's progress bar shows how far it's read. */
 
 /* ------------------------------------------------------ performer/studio tab */
 

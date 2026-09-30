@@ -339,6 +339,9 @@ const R = {
   Component: function Component() {},
   useState() { return [null, () => {}]; }, useEffect() {}, useRef() { return { current: null }; },
   useMemo(f) { return f(); }, useCallback(f) { return f; },
+  // A context's current value is whatever the test sets on it.
+  createContext(d) { return { value: d, Provider: "Provider" }; },
+  useContext(c) { return c.value; },
 };
 const ui = {
   PluginApi: { React: R, ReactDOM: {}, libraries: {}, components: {}, hooks: {}, GQL: {},
@@ -388,6 +391,45 @@ g = cg[0](g[0], CTX);
 eq(g[0].items.map((i) => i.id), ["scenes", "comics"], "never added twice");
 const other = { groupId: "something-else", items: [{ id: "x" }] };
 assert.strictEqual(cg[0](other, CTX)[0], other);
+
+// ---- the Comics list: Stash's gallery list, restricted to comics -----------
+// The restriction is ANDed onto what the user's filter builds, never merged
+// into it, so a user filtering comics by their own tags can't collide with it.
+const hook = ui.ComicReader.comicsHook({ comic: "1" }, { performers: { value: ["7"], modifier: "INCLUDES" } });
+const filt = { makeFilter() { return { tags: { value: ["9"], modifier: "INCLUDES" } }; } };
+assert.strictEqual(hook(filt), filt, "the hook works on Stash's copy in place");
+eq(filt.makeFilter(), {
+  tags: { value: ["9"], modifier: "INCLUDES" },
+  AND: { tags: { value: ["1"], modifier: "INCLUDES", depth: -1 }, performers: { value: ["7"], modifier: "INCLUDES" } },
+}, "user's tags kept; comics + performer ANDed on");
+// an AND already in the user's filter is kept, the restriction nests under it
+const nested = hook({ makeFilter() { return { AND: { rating100: { value: 80, modifier: "GREATER_THAN" } } }; } }).makeFilter();
+eq(nested.AND.rating100, { value: 80, modifier: "GREATER_THAN" });
+eq(nested.AND.AND.tags, { value: ["1"], modifier: "INCLUDES", depth: -1 });
+const bare = { find_filter: {} };
+assert.strictEqual(hook(bare), bare, "not a ListFilterModel: left alone");
+
+// GalleryCardGrid: comic cards inside a Comics list, Stash's grid everywhere
+// else -- with exactly the arguments Stash passed, and never both.
+const gridPatch = patches.instead["GalleryCardGrid"];
+assert.ok(gridPatch && gridPatch.length === 1, "GalleryCardGrid patch registered");
+const gridProps = { galleries: [], zoomIndex: 1 };
+let nextCalls = [];
+const stockGrid = function () { nextCalls.push([this, ...arguments]); return "stock"; };
+const self = {};
+ui.ComicReader.ComicsContext.value = null;
+assert.strictEqual(gridPatch[0].call(self, gridProps, CTX, stockGrid), "stock", "outside Comics: Stash's own grid");
+eq(nextCalls.length, 1);
+assert.strictEqual(nextCalls[0][0], self); assert.strictEqual(nextCalls[0][1], gridProps); assert.strictEqual(nextCalls[0][2], CTX);
+nextCalls = [];
+ui.ComicReader.ComicsContext.value = { tags: { comic: "1" } };
+const inside = gridPatch[0].call(self, gridProps, CTX, stockGrid);
+ui.ComicReader.ComicsContext.value = null;
+assert.strictEqual(nextCalls.length, 0, "inside Comics, Stash's grid isn't also rendered (its hooks would run in ours)");
+assert.strictEqual(inside.type, ui.ComicReader.Boundary, "comic cards sit in an error boundary");
+assert.strictEqual(inside.props.children.type, ui.ComicReader.ComicCardGrid);
+eq(inside.props.children.props, gridProps, "with the props Stash gave the grid");
+assert.strictEqual(inside.props.fallback.props.next, stockGrid, "and fall back to Stash's grid");
 
 console.log("JS OK");
 """

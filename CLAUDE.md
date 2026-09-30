@@ -94,7 +94,7 @@ plugins/
     comic-reader.yml                 Manifest: hooks, tasks, settings, ui files (order matters)
     comic-reader.js                  Backend (Stash's embedded JS, ES5): tags, hooks, tasks
     ui/common.js                     Shared UI helpers; defines window.ComicReader (load first)
-    ui/reader.js, ui/library.js      The reader; the Comics page + the shared cover grid
+    ui/reader.js, ui/library.js      The reader; the Comics list (Stash's own) + comic cards
     ui/builder.js                    "New comic from images"
     ui/inject.js                     Comics tab on performer/studio pages, gallery-page buttons
     ui/main.js                       Route + nav item + injector wiring (load last)
@@ -582,10 +582,32 @@ its README. What matters when changing it:
   comic-reader's `comicTagId` (see `ProtectedTags` above), so the settings
   key names `comicTagId` / `webtoonTagId` / `comicPageTagId` are a contract
   between the two plugins -- don't rename them.
+- **The Comics list is Stash's `FilteredGalleryList`, not a copy of it.**
+  The user asked for exactly Stash's listing (search, saved filters and *Set
+  as default*, filter dialog and chips, sort, per page, operations, zoom,
+  pagination), so `CR.ComicsList` renders the real one and changes three
+  things: `filterHook` wraps the list's copy of the filter so `makeFilter()`
+  returns `{...user's filter, AND: comic restriction}` (the restriction never
+  appears in the UI or gets saved into a filter; an existing `AND` is nested,
+  not replaced); `view` is `comics` / `performer_comics` / `studio_comics`, so
+  the Comics page gets its own default filter instead of the Galleries one
+  (which hides comics); and `extraOperations` adds our items to the `…` menu.
+  Tabs pass `alterQuery: false` so they don't rewrite the performer page's URL.
+- **Comic cards replace the grid only inside a Comics list.** The
+  `patch.instead("GalleryCardGrid")` in main.js reads `CR.ComicsContext`
+  (provided by `ComicsList`) and otherwise returns `next` with exactly the
+  arguments it got. `useContext` runs on every render so the hook order never
+  changes, and the error fallback renders Stash's grid lazily as a component --
+  calling `next` up front would run its hooks inside ours. The test pins both.
 - **Look and theming: build from Stash's own parts.** Cards are
-  `PluginApi.components.GridCard` with the `gallery-card` class names, sized
-  like Stash's (`CR.cardWidth` is its `(w-30)/ceil((w-30)/preferred)-10`); the
-  toolbar reuses `.filtered-list-toolbar` markup and the `zoom-slider`;
+  `PluginApi.components.GridCard` with the `gallery-card` class names and
+  Stash's own `GalleryCard.Overlays/Details/Popovers`, sized like Stash's
+  (`CR.cardWidth` is its `(w-30)/ceil((w-30)/preferred)-10`). Themes size a
+  gallery card's image for landscape (refract forces the header to 4:3 and
+  clips it), so the portrait-cover rules are one class more specific than a
+  theme's `body.x .gallery-card .gallery-card-header` -- the one place
+  comics.css deliberately out-ranks a theme. The builder's toolbar reuses
+  `.filtered-list-toolbar` markup and the `zoom-slider`;
   inputs use `clearable-text-field form-control` / `btn-secondary form-control`;
   messages go through `PluginApi.hooks.useToast`; the spinner is
   `LoadingIndicator`; the reader's root carries `.Lightbox`. comics.css is
