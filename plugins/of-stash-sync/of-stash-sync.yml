@@ -1,6 +1,6 @@
 name: Fan Site Metadata Sync (OnlyFans + JustFor.Fans + Patreon)
 description: Sync scraped metadata (title, details, date, post URL, performers, studio, tags) from OF-Scraper and jff-scraper user_data.db files, and from patreon-dl's on-disk post files, into matching Stash scenes and images, group each post's media into a gallery, and adopt the galleries Stash makes from scanned image folders. Each database's site is detected from the database itself.
-version: 2.8.0
+version: 2.10.0
 url: https://github.com/cgnz2002/stash-plugins
 
 settings:
@@ -154,6 +154,15 @@ tasks:
       mode: full
       site: patreon
       dryRun: true
+  - name: Preview Cleanup of Stray Media (Dry Run)
+    description: "SAFE, WRITES NOTHING. Lists every scene and image that carries one of this plugin's studios but sits OUTSIDE every configured data path - media an older version reached by mistake, because Stash's path filter matches a creator's name anywhere in your library (e.g. a creator called 'Mirenac' matched /torrents/downloads/whisparr/[Mirenac] .../1.png). Run this FIRST and read the log."
+    defaultArgs:
+      mode: cleanup
+      dryRun: true
+  - name: Clean Up Stray Media
+    description: "Undoes what an older version wrote onto media outside your data paths: clears the title, details, date, code, studio, this plugin's tags, the post URL and the creator performer, and sets organized back to false so the media returns to whatever 'not yet sorted' workflow it came from. Only ever touches media OUTSIDE every configured data path - your real libraries are never altered. The originals cannot be restored, so preview first."
+    defaultArgs:
+      mode: cleanup
   - name: Sync Performer
     description: Full re-sync of a SINGLE performer, across every configured site. Triggered by the "Sync Fan Sites" button on a performer's page (it passes the performer id); running it here without one does nothing.
     defaultArgs:

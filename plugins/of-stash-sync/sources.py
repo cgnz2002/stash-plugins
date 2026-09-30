@@ -65,6 +65,11 @@ class SourceProfile:
         # Filled in per run from the settings / Stash lookups.
         self.parent_default_name = parent_default  # possibly overridden by settings
         self.parent_id = None
+        # The configured data path for this site, filled in per run. Media
+        # queries are confined to it: Stash's `path` filter is a substring match
+        # over the whole library, so a creator name can otherwise match files
+        # with no connection to the library.
+        self.data_path = ""
         self.icon = None
 
     def profile_url(self, username):
