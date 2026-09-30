@@ -102,9 +102,11 @@
 
   // ------------------------------------------------------------ comic card
 
-  // Portrait covers want narrower cards than Stash's landscape gallery cards
-  // (280/340/480/640); the zoom slider works the same way.
-  var ZOOM_WIDTHS = [160, 210, 280, 380];
+  // Portrait covers want somewhat narrower cards than Stash's landscape
+  // gallery cards (280/340/480/640), but not so narrow that the title and the
+  // details row under the cover crowd (0.2.0's 210 default did); the zoom
+  // slider works the same way.
+  var ZOOM_WIDTHS = [200, 280, 360, 460];
 
   // Built on GridCard with the gallery-card class names, and Stash's own
   // GalleryCard.Overlays / .Details / .Popovers for the studio logo, date and
