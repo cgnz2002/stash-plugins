@@ -507,3 +507,34 @@ class StashClient:
         }
         """
         self.call(query, {"id": gallery_id, "ids": image_ids})
+
+    def remove_gallery_images(self, gallery_id, image_ids):
+        """Detach images from a gallery.
+
+        Only ever called with images this plugin can attribute to a DIFFERENT
+        post -- see reconcile_post_gallery. Stash refuses this on a folder-based
+        gallery for the same reason it refuses addGalleryImages, so callers must
+        check `folder` first.
+        """
+        if not image_ids:
+            return
+        query = """
+        mutation RemoveGalleryImages($id: ID!, $ids: [ID!]!) {
+            removeGalleryImages(input: { gallery_id: $id, image_ids: $ids })
+        }
+        """
+        self.call(query, {"id": gallery_id, "ids": image_ids})
+
+    def find_gallery_image_ids(self, gallery_id):
+        """Ids of the images currently in a gallery."""
+        query = """
+        query FindImages($f: ImageFilterType!) {
+            findImages(image_filter: $f, filter: { per_page: -1 }) {
+                images { id }
+            }
+        }
+        """
+        variables = {"f": {"galleries": {
+            "value": [gallery_id], "modifier": "INCLUDES",
+        }}}
+        return [i["id"] for i in self.call(query, variables)["findImages"]["images"]]

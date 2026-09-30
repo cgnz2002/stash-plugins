@@ -866,6 +866,53 @@ def _gallery_meta(db, processor, profile, post_id, group, performers, tags,
     return gallery_input, title, sponsor_ids
 
 
+def _media_paths(item):
+    """Every file path of a scene or image, whichever shape Stash returned."""
+    paths = [f.get("path") for f in (item.get("files") or [])]
+    paths += [vf.get("path") for vf in (item.get("visual_files") or [])]
+    return [p for p in paths if p]
+
+
+def media_under_data_path(items, source, username, kind):
+    """Drop media that isn't inside this site's configured data path.
+
+    Stash's `path` filter is a plain SUBSTRING match over the WHOLE library, and
+    the media queries pass only the creator's username -- so a creator called
+    'Mirenac' matched
+    `/torrents/downloads/whisparr/[Mirenac] <title>/1.png`, a file with no
+    connection to the library at all. It was then claimed by a post whose own
+    image happened to be named `1.png`, and got that post's title, URL, date,
+    studio and `organized` flag written onto it.
+
+    So the substring result is confined to the data path the user configured for
+    this site. That boundary is the only one that holds: matching the creator as
+    a whole path SEGMENT (what sync_folder_galleries does) would reject Patreon's
+    own `<vanity> - <Name>` folders, and the torrent path above has 'Mirenac'
+    inside a segment rather than as one.
+
+    A source with no configured path is left alone, since there is nothing to
+    confine it to.
+    """
+    root = (getattr(source, "data_path", "") or "").strip()
+    if not root:
+        return items
+    prefix = os.path.normpath(root) + os.sep
+    kept, dropped = [], 0
+    for item in items:
+        paths = _media_paths(item)
+        if paths and not any(
+            (os.path.normpath(p) + os.sep).startswith(prefix) for p in paths
+        ):
+            dropped += 1
+            continue
+        kept.append(item)
+    if dropped:
+        log.LogDebug(
+            "  Ignored {} {}(s) matching '{}' from outside {}".format(
+                dropped, kind, username, root))
+    return kept
+
+
 def group_media_by_post(db, user_id, all_scenes, all_images):
     """post id -> {"images": [stash ids], "scenes": [...], posted_at, api_type}.
 
@@ -878,18 +925,43 @@ def group_media_by_post(db, user_id, all_scenes, all_images):
     # lands in two post folders under one name), and a basename-keyed index
     # would let one of those files evict the other.
     index, by_name = {}, {}
+
+    def remember(name, entry):
+        """Record a basename, or mark it ambiguous by storing None.
+
+        An ambiguous name is worse than a missing one: it produces a confident
+        wrong answer. Two Stash media sharing a basename can never be told apart
+        by name, so neither is offered.
+        """
+        if name in by_name and by_name[name] != entry:
+            by_name[name] = None
+        else:
+            by_name.setdefault(name, entry)
+
     for scene in all_scenes:
         for f in scene.get("files") or []:
-            index[f["path"]] = ("scene", scene["id"])
-            by_name.setdefault(os.path.basename(f["path"]), ("scene", scene["id"]))
+            index[os.path.normpath(f["path"])] = ("scene", scene["id"])
+            remember(os.path.basename(f["path"]), ("scene", scene["id"]))
     for image in all_images:
         for vf in image.get("visual_files") or []:
             if vf.get("path"):
-                index[vf["path"]] = ("image", image["id"])
+                index[os.path.normpath(vf["path"])] = ("image", image["id"])
             if vf.get("basename"):
-                by_name.setdefault(vf["basename"], ("image", image["id"]))
+                remember(vf["basename"], ("image", image["id"]))
+
+    # Which source basenames belong to more than one post. Built up front
+    # because the fallback below has to know before it answers.
+    seen_owner, ambiguous = {}, set()
+    for row in db.medias_for_model(user_id):
+        name, post_id = row["filename"], row["post_id"]
+        if post_id is None:
+            continue
+        if seen_owner.setdefault(name, str(post_id)) != str(post_id):
+            ambiguous.add(name)
 
     groups = {}
+    matched_by_path = 0
+    wanted_paths = 0
     for row in db.medias_for_model(user_id):
         post_id = row["post_id"]
         if post_id is None:
@@ -901,16 +973,84 @@ def group_media_by_post(db, user_id, all_scenes, all_images):
         })
         # Patreon rows carry the media's path; the sqlite-backed sources' rows
         # (sqlite3.Row) have no such column, so they fall through to the name.
+        #
+        # When a row HAS a path, a miss is final -- it means Stash doesn't hold
+        # that exact file, and the basename fallback would then match a
+        # DIFFERENT post's file of the same name. That is how one image ended up
+        # in four unrelated comics' galleries: every post whose folder contained
+        # a same-named image claimed it, and addGalleryImages only ever adds, so
+        # each wrong claim stuck permanently.
         row_path = row["path"] if "path" in row.keys() else None
-        entry = (index.get(row_path) if row_path else None) \
-            or by_name.get(row["filename"])
+        name = row["filename"]
+        entry = None
+        if row_path:
+            wanted_paths += 1
+            entry = index.get(os.path.normpath(row_path))
+            if entry:
+                matched_by_path += 1
+        if entry is None and name not in ambiguous:
+            # Falling back on NAME is safe only while the name points at one
+            # post on both sides. A shared basename is exactly what put one
+            # image into four unrelated comics' galleries: every post holding a
+            # same-named file claimed it, and addGalleryImages only ever adds,
+            # so each wrong claim stuck. Keeping the fallback for unique names
+            # means a data path that doesn't quite match Stash's library path
+            # still syncs most of a library instead of silently matching none.
+            entry = by_name.get(name)
         if not entry:
             continue
         kind, stash_id = entry
         bucket = g["images"] if kind == "image" else g["scenes"]
         if stash_id not in bucket:
             bucket.append(stash_id)
+
+    # A source that supplies paths but matches none of them means the plugin's
+    # data path and Stash's library path disagree -- a wholly recoverable
+    # misconfiguration that would otherwise look like "the sync just does
+    # nothing", since only uniquely-named files would still be found by name.
+    if wanted_paths and not matched_by_path and (all_images or all_scenes):
+        log.LogWarning(
+            "None of the {} source file paths matched a path in Stash. The "
+            "data path setting probably doesn't match the library path Stash "
+            "scanned (e.g. /data/patreon vs a different mount). Matching fell "
+            "back to filenames, which cannot tell same-named files apart."
+            .format(wanted_paths))
     return groups
+
+
+def reconcile_post_gallery(client, gallery_id, want_image_ids, owned_elsewhere,
+                           totals):
+    """Detach images that belong to a DIFFERENT post from this post's gallery.
+
+    `addGalleryImages` only ever adds, so a wrong membership is permanent: a
+    basename collision once let several posts each claim the same image, and the
+    galleries kept it long after the matching was fixed. Nothing re-derives a
+    gallery's contents, so the mistakes had to be undone by hand.
+
+    The safety rule is that an image is removed ONLY when this run can name the
+    other post it belongs to (`owned_elsewhere`). An image the plugin does not
+    recognise is left alone -- it may have been added by hand, or by another
+    plugin, and this pass has no business deciding it doesn't belong. That makes
+    the operation narrow enough to run unattended: it can only ever undo a claim
+    the plugin itself made wrongly.
+    """
+    if not owned_elsewhere:
+        return
+    try:
+        current = client.find_gallery_image_ids(gallery_id)
+    except RuntimeError as e:
+        log.LogWarning("Could not list images in gallery {}: {}".format(
+            gallery_id, e))
+        return
+
+    want = set(want_image_ids)
+    stale = [i for i in current if i not in want and i in owned_elsewhere]
+    if not stale:
+        return
+    client.remove_gallery_images(gallery_id, stale)
+    totals["detached"] = totals.get("detached", 0) + len(stale)
+    log.LogInfo("  Detached {} image(s) that belong to another post".format(
+        len(stale)))
 
 
 def sync_collection_galleries(client, db, profile, processor, studios, performers,
@@ -1049,6 +1189,14 @@ def build_post_galleries(client, db, profile, processor, performers, tags,
             for u in gal.get("urls") or []:
                 by_url[u] = gal
 
+    # image id -> the post it actually belongs to. Built from this run's own
+    # grouping, so it only ever names images the plugin can attribute; anything
+    # else stays off-limits to the reconcile pass below.
+    owner_of = {}
+    for pid, g in groups.items():
+        for image_id in g["images"]:
+            owner_of.setdefault(image_id, pid)
+
     username = profile["username"]
     # Resolve everything sequentially (no cache races), collecting one write task
     # per gallery; the tasks (create/update + attach images) run in parallel.
@@ -1104,12 +1252,20 @@ def build_post_galleries(client, db, profile, processor, performers, tags,
             # update it and leave the image list alone.
             attach = not existing.get("folder")
 
+            # Images another post owns are only ever detached on a FULL sync:
+            # a plain sync is meant to fill in what's missing, not to re-derive
+            # what is already there.
+            wrong = {}
+            if attach and full_sync:
+                wrong = {i: p for i, p in owner_of.items() if p != post_id}
+
             def _update_task(gi=gallery_input, gid=existing["id"], imgs=list(images),
-                             attach=attach):
+                             attach=attach, wrong=wrong):
                 if gi is not None:
                     client.update_gallery(gi)
                 if attach:
                     client.add_gallery_images(gid, imgs)
+                    reconcile_post_gallery(client, gid, imgs, wrong, totals)
                 return {"galleries": 1}
             tasks.append(_update_task)
         else:
@@ -1363,8 +1519,10 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
     # gallery pass too. The plain sync only *processes* unorganized media, so
     # organized items are skipped when building the update map (but still count
     # toward galleries).
-    all_scenes = client.find_scenes(username, True)
-    all_images = client.find_images(username, True)
+    all_scenes = media_under_data_path(
+        client.find_scenes(username, True), source, username, "scene")
+    all_images = media_under_data_path(
+        client.find_images(username, True), source, username, "image")
     media_map = {}
     skipped_multi = 0
     for scene in all_scenes:
@@ -1566,6 +1724,9 @@ def main():
         source.parent_default_name = get_setting(
             config, source.parent_setting, source.parent_default
         )
+        # Remembered so the media queries can be confined to this site's
+        # library -- see media_under_data_path.
+        source.data_path = path
         configured_sources.append((source, path))
     try:
         max_title_length = int(get_setting(config, "maxTitleLength", DEFAULT_MAX_TITLE_LENGTH))
@@ -1791,6 +1952,8 @@ def main():
         summary += ", Galleries: {}".format(totals["galleries"])
     if totals["skipped_multifile"]:
         summary += ", Skipped multi-file: {}".format(totals["skipped_multifile"])
+    if totals.get("detached"):
+        summary += ", Detached from wrong gallery: {}".format(totals["detached"])
     log.LogInfo(summary)
 
 

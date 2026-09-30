@@ -313,6 +313,42 @@ run, so there is no per-site task:
   so re-runs write nothing. The creator is matched by whole **path segment**, not
   substring, because Stash's `path` filter is a substring match and would
   otherwise let `jake` claim `/data/jakeson/...`.
+- **Media queries are confined to the site's data path**
+  (`media_under_data_path`). Stash's `path` filter is a plain **substring**
+  match over the **whole library**, and `find_scenes`/`find_images` pass only
+  the creator's username -- so a Patreon creator with the vanity `Mirenac`
+  matched `/torrents/downloads/whisparr/[Mirenac] <title>/1.png`, a file with no
+  connection to the library. A post whose own image was also named `1.png` then
+  claimed it, and the plugin wrote that post's title, URL, date, studio and
+  `organized: True` onto somebody's torrent download. `source.data_path` is
+  filled in per run from the same setting used to find libraries, and the
+  substring result is filtered to paths under it (normalised, `+ os.sep` so
+  `/data/patreon` can't swallow `/data/patreon-backup`; a multi-file item is
+  kept if ANY file is inside). Note the whole-path-SEGMENT rule
+  `sync_folder_galleries` uses does **not** work here: it would reject
+  Patreon's own `<vanity> - <Name>` folders, and the torrent path has `Mirenac`
+  inside a segment rather than as one.
+- **Gallery membership: match on path, and only guess at an unambiguous name.**
+  `group_media_by_post` indexes Stash media by **normalised path**, with a
+  basename index as fallback. The fallback is used **only when the name is
+  unambiguous on both sides** — one post in the source, one media in Stash —
+  because a shared basename produces a confident *wrong* answer: several
+  Patreon post folders holding a same-named file each claimed the same Stash
+  image, and since `addGalleryImages` only ever adds and nothing re-derives a
+  gallery's contents, every wrong claim stuck. One image was observed sitting in
+  four unrelated comics' galleries. The fallback is kept rather than deleted
+  because dropping it turns a *data path that doesn't match Stash's library
+  path* into a silent total no-match; that case now logs an explicit warning
+  naming the likely misconfiguration. `remember()` marks a duplicate basename by
+  storing `None`, so ambiguity is recorded rather than resolved first-wins.
+- **`reconcile_post_gallery` is the only thing that removes images from a
+  gallery**, and it runs on a **full sync only**. It detaches an image from a
+  post gallery solely when the same run can name the *other* post that owns it
+  (`owner_of`, built from this run's grouping). Media the plugin cannot
+  attribute — added by hand, or by another plugin — is never touched, which is
+  what makes an otherwise destructive pass safe to run unattended: it can only
+  undo a claim the plugin itself made. Folder galleries are excluded (Stash
+  rejects the mutation, same as `addGalleryImages`).
 - **`ProtectedTags` — another plugin's tags are not ours to delete.** A
   sync/full pass replaces `tag_ids`, and `keepManualEdits` (off by default)
   protects the *user's* manual tags, which is a different question from another
