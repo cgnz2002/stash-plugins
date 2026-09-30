@@ -21,7 +21,7 @@ class SourceProfile:
     def __init__(self, key, slug, label, site_tag, studio_suffix, parent_setting,
                  parent_default, path_setting, icon_file, profile_url,
                  post_url, media_code, link_domain, reader=None,
-                 real_titles=False):
+                 real_titles=False, merged_files_are_duplicates=False):
         # Value of schema_flags.source that selects this profile (None = the
         # OnlyFans default, since OF-Scraper databases carry no such flag).
         self.key = key
@@ -45,6 +45,20 @@ class SourceProfile:
         # Whether the site's posts carry an authored title (Patreon) rather than
         # one that has to be derived from the post text (OnlyFans/JustFor.Fans).
         self.real_titles = real_titles
+        # Whether this site's multi-file media are byte-identical DUPLICATES
+        # rather than genuinely different files, which decides whether the
+        # Skip Multi-file setting applies to it.
+        #
+        # That setting exists for OnlyFans, where a merged scene is several
+        # DIFFERENT files gathered from different pages -- so there is no single
+        # right post to take metadata from, and overwriting is the greater harm.
+        # patreon-dl produces the opposite case: a creator who posts the same
+        # image at several tiers downloads byte-identical copies into each post
+        # folder, and Stash merges them automatically on hash. Skipping those
+        # means skipping ordinary images whose only sin is being posted twice,
+        # and the "merge" carries no information to protect. So Patreon opts out
+        # and is synced regardless of the setting.
+        self.merged_files_are_duplicates = merged_files_are_duplicates
         self._profile_url = profile_url
         self._post_url = post_url
         self._media_code = media_code
@@ -207,6 +221,7 @@ PATREON = SourceProfile(
     media_code=_patreon_media_code,
     link_domain="patreon.com",
     real_titles=True,
+    merged_files_are_duplicates=True,
 )
 
 ALL_PROFILES = [ONLYFANS, JUSTFORFANS, PATREON]

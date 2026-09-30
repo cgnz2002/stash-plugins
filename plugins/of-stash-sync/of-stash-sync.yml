@@ -1,6 +1,6 @@
 name: Fan Site Metadata Sync (OnlyFans + JustFor.Fans + Patreon)
 description: Sync scraped metadata (title, details, date, post URL, performers, studio, tags) from OF-Scraper and jff-scraper user_data.db files, and from patreon-dl's on-disk post files, into matching Stash scenes and images, group each post's media into a gallery, and adopt the galleries Stash makes from scanned image folders. Each database's site is detected from the database itself.
-version: 2.6.3
+version: 2.7.0
 url: https://github.com/cgnz2002/stash-plugins
 
 settings:
@@ -50,7 +50,7 @@ settings:
     type: BOOLEAN
   skipMultiFile:
     displayName: Skip Multi-file Scenes and Images
-    description: "When on, the Sync and Full Sync tasks skip any scene or image that has more than one file (typically merged scenes from multiple OF pages), to avoid overwriting their performers and metadata. Does not affect the Tag task. Default off."
+    description: "When on, the Sync and Full Sync tasks skip any scene or image that has more than one file (typically merged scenes from multiple OF pages), to avoid overwriting their performers and metadata. Does not affect the Tag task. DOES NOT APPLY TO PATREON: there a multi-file item is a byte-identical duplicate -- a creator who posts the same image at several tiers downloads an identical copy into each post folder and Stash merges them on hash -- so skipping them would skip ordinary images whose only sin is being posted twice. Patreon media is always synced, and takes the metadata of the lowest-sorting post folder it appears in. Default off."
     type: BOOLEAN
   syncWorkers:
     displayName: Sync Workers

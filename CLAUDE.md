@@ -52,6 +52,8 @@ Currently there are two plugins (the Patreon one is being retired — see
 ```
 build_site.sh                       Template build script: plugins/ -> _site/<branch>/{index.yml, <id>.zip}
 .github/workflows/deploy.yml         Builds the source and deploys to GitHub Pages on push to plugins/**
+docs/stash-platform.md               What STASH offers an extension author, and how to verify it
+tests/                               Stdlib test scripts + run.py (outside plugins/ so they aren't packaged)
 plugins/
   of-stash-sync/                     (id kept for settings continuity; serves all sites)
     of-stash-sync.yml                Plugin manifest (settings, tasks, exec entry point)
@@ -156,7 +158,9 @@ manifest). At runtime:
   error level and marks the task failed). `main()` returns the error string;
   keep that contract when adding new fatal-exit paths.
 
-The five tasks are defined in the manifest and selected by `args.mode`. Each
+The manifest's tasks (15 of them, over 17 settings) are selected by `args.mode`,
+crossed with the optional `args.site` scope and `args.dryRun` — which is why
+there are far more tasks than modes. Each
 covers **every configured site** — the per-site data paths are all scanned in one
 run, so there is no per-site task:
 
@@ -371,6 +375,32 @@ asks the profile what to open.
   exists elsewhere; `embed/` holds media that exists nowhere else, which is the
   whole distinction. Its `.txt` descriptors get indexed too, harmlessly: Stash
   never ingests one, so it can never match a scene or image.
+- **Patreon basenames are not unique; match on the path.** A creator who posts
+  the same video at two tiers gets the identical filename in both post folders
+  (`embed/TARZAN & MILO.mp4.mp4` under both `- 4k Diamond` and
+  `- 1080p - Gold`). Keyed by basename that is two silent bugs: one file evicts
+  the other from the index, so a Stash scene is never processed at all; and
+  whichever post `os.walk` reached first supplies the metadata for both. So
+  `PatreonLibrary` keys `_by_path` on the absolute path and exposes
+  `media_by_path()`, `sync.py`'s `media_map` and `group_media_by_post`'s index
+  are both keyed by path, and lookups go path-first with the basename as
+  fallback. `SourceDatabase.media_by_path()` returns None by design — OF-Scraper
+  and jff-scraper name files after the media id, so a basename already
+  identifies a post there — and the fallback covers it, the same degrading
+  -capability pattern as `hashtags()`/`tier()`. A multi-file scene yields one
+  `media_map` entry per file, so `seen_media` keeps it from being written twice.
+- **Skip Multi-file does not apply to Patreon**
+  (`SourceProfile.merged_files_are_duplicates`, True only there). The setting
+  exists for OnlyFans, where a merged scene is several *different* files from
+  different pages: no single post is the right source and overwriting is the
+  greater harm. patreon-dl gives the opposite case — the same image posted at
+  several tiers downloads byte-identical into each post folder and Stash merges
+  them on hash — so skipping would skip ordinary images and the merge protects
+  nothing. The flag is per-site rather than a setting because it states a fact
+  about the site, not a preference; it defaults to False so a new profile opts
+  in deliberately. `media_map` is iterated **sorted**, so such an item always
+  takes the lowest-sorting post's metadata instead of flipping between posts
+  across runs.
 - **Video has no folder of its own** — `.mp4` sits in `images/`, `attachments/`
   and `embed/` next to the pictures (85 and 65 in that same log), alongside
   `.psd`/`.zip`/`.pdf` Stash won't ingest. The media index is therefore
@@ -386,7 +416,14 @@ asks the profile what to open.
   which filters *for* `folder`; the field is the discriminator either way, so
   the studio query fetches it.
 - **Titles are authored**, hence `real_titles`: used as written, with the body
-  kept whole as details. Title Exclusions still apply.
+  kept whole as details. Title Exclusions still apply — `SourceProfile.title()`
+  strips on **both** branches, so Patreon's authored titles and the other
+  sites' derived ones behave alike. Note `real_titles` deliberately skips
+  `maxTitleLength`: an authored title is a deliberate length, unlike one cut
+  out of a wall of post text. Collection gallery titles are stripped too, at
+  their own call site in `sync_collection_galleries` — they don't route through
+  `SourceProfile.title()`, so adding a title path means checking it reaches
+  there as well.
 - **Collections → one flat gallery each** (`sync_collection_galleries`), holding
   member posts' images and linking their scenes. Stash has no nested galleries
   and no gallery→group link, so a gallery *of* galleries is impossible; Groups
@@ -445,10 +482,32 @@ automatically and the next deploy publishes it. Follow the existing
 `interface: raw` + stdin-JSON / stderr-logging pattern unless the plugin type
 calls for something else.
 
+**Read `docs/stash-platform.md` first if the new plugin isn't another
+`interface: raw` task plugin.** It covers what Stash actually offers — the three
+plugin interfaces (`raw` / `rpc` / `js`), hooks (all `.Post`, and no scan hook
+exists), what a scraper can and cannot do (and that a scraper isn't a plugin and
+isn't packaged by `build_site.sh`), gallery chapters, and how to verify any of
+it against the Stash source rather than from memory. Several of its entries are
+UI-only limits that reading the GraphQL schema will not reveal.
+
+Note `build_site.sh` globs `plugins/**/*.yml`, so **every** `.yml` under
+`plugins/` becomes a published plugin — don't put fixtures or config there.
+
 ## Conventions
 
 - Python: stdlib only, classes for clients/resolvers, `.format()` string
   formatting (as in existing code), docstrings explaining *why* (schema versions,
   edge cases) rather than restating the code.
-- There is no test suite or linter configured in this repo.
+- No linter is configured. There **are** tests: `python3 tests/run.py` (add a
+  substring to filter, e.g. `python3 tests/run.py patreon`). Stdlib only, one
+  process per file, each asserting its way to `ALL OK`; nothing talks to a
+  running Stash. They live at the repo root rather than beside the plugin
+  because `build_site.sh` runs `zip -r` over a plugin's whole directory, so
+  anything kept there ships to every user's install.
+- Most of them encode a bug that actually shipped — `embed/` holding real
+  media, the folder-gallery guard, path-not-basename matching, the dry-run
+  sentinel needing to look like an id. Adding a case with a fix is how that
+  reasoning survives; note that `test_patreon.py` once asserted the *wrong*
+  behaviour and so confirmed a bug instead of catching it, because it was
+  written from the same bad premise as the code.
 - Commit messages: short imperative subject lines (see `git log`).

@@ -101,6 +101,18 @@ class SourceDatabase:
                 usernames.append(name)
         return [{"user_id": None, "username": name} for name in usernames]
 
+    def media_by_path(self, user_id, path):
+        """Always None: an optional capability these scrapers don't need.
+
+        Both name their files after the media id, so a basename identifies a
+        post on its own and there is nothing a path lookup would disambiguate.
+        Patreon is the source that needs it -- the same filename really can
+        appear under two posts there -- and callers fall back to
+        media_by_filename when this returns None, exactly as they do for
+        hashtags()/tier() on a database that has no such table.
+        """
+        return None
+
     def media_by_filename(self, user_id, filename):
         date = "{} AS posted_at".format(self._date_col)
         if self._has_model_id:

@@ -799,16 +799,21 @@ def group_media_by_post(db, user_id, all_scenes, all_images):
     post's media regardless of the sync/full mode, and collections group whole
     posts the same way.
     """
-    # filename -> (kind, stash id)
-    index = {}
+    # path -> (kind, stash id), plus a basename fallback. Keyed by path because
+    # a basename is not unique on Patreon (the same video posted at two tiers
+    # lands in two post folders under one name), and a basename-keyed index
+    # would let one of those files evict the other.
+    index, by_name = {}, {}
     for scene in all_scenes:
         for f in scene.get("files") or []:
-            index[os.path.basename(f["path"])] = ("scene", scene["id"])
+            index[f["path"]] = ("scene", scene["id"])
+            by_name.setdefault(os.path.basename(f["path"]), ("scene", scene["id"]))
     for image in all_images:
         for vf in image.get("visual_files") or []:
-            basename = vf.get("basename")
-            if basename:
-                index[basename] = ("image", image["id"])
+            if vf.get("path"):
+                index[vf["path"]] = ("image", image["id"])
+            if vf.get("basename"):
+                by_name.setdefault(vf["basename"], ("image", image["id"]))
 
     groups = {}
     for row in db.medias_for_model(user_id):
@@ -820,7 +825,11 @@ def group_media_by_post(db, user_id, all_scenes, all_images):
             "images": [], "scenes": [], "posted_at": row["posted_at"],
             "api_type": row["api_type"],
         })
-        entry = index.get(row["filename"])
+        # Patreon rows carry the media's path; the sqlite-backed sources' rows
+        # (sqlite3.Row) have no such column, so they fall through to the name.
+        row_path = row["path"] if "path" in row.keys() else None
+        entry = (index.get(row_path) if row_path else None) \
+            or by_name.get(row["filename"])
         if not entry:
             continue
         kind, stash_id = entry
@@ -860,7 +869,12 @@ def sync_collection_galleries(client, db, profile, processor, studios, performer
     tasks = []
     for coll in collections:
         url = coll["url"]
-        title = coll["title"] or "Collection {}".format(coll["collection_id"])
+        # Exclusions apply here as they do to every other title the plugin
+        # writes: a creator who prefixes their post titles with boilerplate
+        # generally prefixes their collection titles with it too. The synthetic
+        # fallback isn't authored text, so it is left alone.
+        title = processor.apply_title_exclusions(coll["title"]) or \
+            "Collection {}".format(coll["collection_id"])
         image_ids, scene_ids = [], []
         for post_id in coll["post_ids"]:
             group = groups.get(str(post_id))
@@ -1237,14 +1251,21 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
                 log.LogError("Could not resolve studio for {}; skipping".format(username))
                 return
 
-    # Map each Stash media file's basename to (kind, stash id, existing tag ids).
+    # Map each Stash media file's path to (kind, stash id, existing tag ids).
     # We route the update by where the media actually lives in Stash so the id
     # always matches the mutation (scenes -> sceneUpdate, images -> imageUpdate).
     # Tag-only and full passes look at organized media too.
     # The skip-multi-file guard protects merged scenes (multiple files from
     # different OF pages) from having their performers/metadata overwritten. It
-    # only applies to the destructive sync tasks, not the additive tag pass.
-    skip_multi = skip_multi_file and not tag_only
+    # only applies to the destructive sync tasks, not the additive tag pass, and
+    # not to sites whose merged media are byte-identical duplicates rather than
+    # different files -- see SourceProfile.merged_files_are_duplicates.
+    skip_multi = (skip_multi_file and not tag_only
+                  and not source.merged_files_are_duplicates)
+    if skip_multi_file and not tag_only and source.merged_files_are_duplicates:
+        log.LogDebug(
+            "  Skip Multi-file does not apply to {}: its merged media are "
+            "identical duplicates, so they are synced".format(source.label))
 
     include_all = full_sync or tag_only or crew_only
     # Fetch the creator's media once (organized included) and reuse it for the
@@ -1269,7 +1290,7 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
             scene.get("director"),
         )
         for f in files:
-            media_map[os.path.basename(f["path"])] = entry
+            media_map[f["path"]] = entry
     for image in all_images:
         if not include_all and image.get("organized"):
             continue
@@ -1284,9 +1305,9 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
             image.get("photographer"),
         )
         for vf in visual_files:
-            basename = vf.get("basename")
-            if basename:
-                media_map[basename] = entry
+            path = vf.get("path")
+            if path:
+                media_map[path] = entry
     log.LogInfo(
         "  {} scenes, {} images".format(len(all_scenes), len(all_images))
     )
@@ -1299,17 +1320,32 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
     # Resolve everything sequentially (no cache races), collecting one write task
     # per media; the update mutations then run in parallel.
     media_tasks = []
-    for basename, (kind, stash_id, existing_tags, existing_perf, existing_credit) in media_map.items():
-        media_row = db.media_by_filename(user_id, basename)
+    # A multi-file scene has one entry per file, so without this a scene whose
+    # files span two posts would be written twice, the second update silently
+    # undoing the first.
+    seen_media = set()
+    # Sorted so a merged media spanning two posts always takes the same one
+    # (the lowest path) instead of whichever the dict happened to yield first --
+    # otherwise re-runs could flip such an item between two posts' metadata.
+    for path, (kind, stash_id, existing_tags, existing_perf, existing_credit) in sorted(media_map.items()):
+        basename = os.path.basename(path)
+        # Path first, basename second. The two are equivalent for OF-Scraper and
+        # jff-scraper, whose filenames are media ids; on Patreon the same
+        # basename really can appear under several posts (the same video posted
+        # at two tiers), and only the path says which post this file belongs to.
+        media_row = (db.media_by_path(user_id, path)
+                     or db.media_by_filename(user_id, basename))
         if not media_row:
             # Logged so an unexplained "Skipped: n" can be traced to the actual
-            # files: a name Stash has but the source doesn't means the media sits
+            # files: a path Stash has but the source doesn't means the media sits
             # somewhere the reader isn't looking (an excluded folder, a path
             # outside the data path), which is otherwise invisible.
-            log.LogDebug(
-                "  No source entry for '{}' -- skipped".format(basename))
+            log.LogDebug("  No source entry for '{}' -- skipped".format(path))
             totals["skipped"] += 1
             continue
+        if (kind, stash_id) in seen_media:
+            continue
+        seen_media.add((kind, stash_id))
 
         if tag_only:
             update, added = build_tag_only_update(
