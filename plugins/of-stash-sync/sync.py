@@ -31,6 +31,14 @@ DEFAULT_MAX_TITLE_LENGTH = 65
 # as a name OR an alias is reused rather than colliding on create.
 SPONSORED_TAG = "sponsored"
 
+# Another plugin in this repo, comic-reader, marks comics with a tag tree: a
+# parent "Comic" tag whose children ("Webtoon" on galleries, "Comic Page" on
+# the images inside one) say what a piece of media IS. It keeps the parent's id
+# in its own plugin settings, so the id is discovered rather than guessed --
+# nothing here depends on those tags' names, which the user can change.
+COMIC_PLUGIN_ID = "comic-reader"
+COMIC_TAG_SETTING = "comicTagId"
+
 # Stash is SQLite-backed and SQLite has a single writer, so parallel writes
 # don't actually commit concurrently -- they serialise on the DB write lock.
 # A little concurrency hides per-request latency, but too much just piles up
@@ -352,6 +360,67 @@ class StudioResolver:
         return studio_id
 
 
+class ProtectedTags:
+    """Tags another plugin owns, which this sync must never strip.
+
+    A sync/full pass REPLACES a media's `tag_ids` with the post's derived tags
+    (that is the point -- it is how a re-sync corrects stale tags). The
+    `keepManualEdits` setting turns that into a merge, but it is off by default
+    and it protects the user's *manual* tags, which is a different question from
+    another plugin's bookkeeping. Where the two plugins' libraries overlap, a
+    Full Sync was quietly deleting comic-reader's marks and, with them, whether
+    Stash still knew a gallery was a comic.
+
+    So these ids are kept regardless of `keepManualEdits`: they are not a
+    preference, they are someone else's data. The set is the configured Comic
+    tag plus every descendant, resolved once per run -- a tag tree can grow new
+    children (a new comic format) without this needing to know their names.
+
+    Protecting nothing is the correct behaviour when comic-reader is absent or
+    unconfigured, and is what an empty set does: `keep()` returns nothing and
+    every call site is left exactly as it was.
+    """
+
+    def __init__(self, client):
+        self.ids = frozenset()
+        try:
+            config = client.get_plugin_config(COMIC_PLUGIN_ID)
+        except RuntimeError as e:
+            log.LogWarning("Could not read {} settings: {}".format(
+                COMIC_PLUGIN_ID, e))
+            return
+        root = str(get_setting(config, COMIC_TAG_SETTING, "") or "").strip()
+        if not root:
+            return
+
+        ids = {root}
+        try:
+            ids.update(str(t) for t in client.find_tag_descendants(root))
+        except RuntimeError as e:
+            # Keep the root rather than nothing: a failed descendant lookup is
+            # a reason to protect less precisely, never a reason to resume
+            # deleting the tag we already know about.
+            log.LogWarning(
+                "Could not expand the Comic tag tree ({}); protecting only the "
+                "parent tag".format(e))
+        self.ids = frozenset(ids)
+        log.LogInfo("Protecting {} comic tag(s) from being replaced".format(
+            len(self.ids)))
+
+    def keep(self, existing_tag_ids):
+        """The protected ids among the tags a media already carries."""
+        if not self.ids or not existing_tag_ids:
+            return []
+        return [tid for tid in existing_tag_ids if tid in self.ids]
+
+    def merge_into(self, tag_ids, existing_tag_ids):
+        """Append any protected tag the media already had, in place."""
+        for tid in self.keep(existing_tag_ids):
+            if tid not in tag_ids:
+                tag_ids.append(tid)
+        return tag_ids
+
+
 class TagResolver:
     """Resolve (and create if missing) plugin tags: the OnlyFans site tag and the
     paid/archived status tags.
@@ -631,7 +700,8 @@ def build_update(db, processor, profile, media_row, creator_ids, studio_id,
                  resolver, tags, tag_matcher, kind, creator_roles, creator_name,
                  source,
                  existing_performer_ids=None, existing_tag_ids=None,
-                 keep_manual_edits=False, creator_sponsor=False):
+                 keep_manual_edits=False, creator_sponsor=False,
+                 protected_tags=None):
     username = profile["username"]
     post_id = media_row["post_id"]
     filename = media_row["filename"]
@@ -684,6 +754,10 @@ def build_update(db, processor, profile, media_row, creator_ids, studio_id,
         for tid in existing_tag_ids:
             if tid not in tag_ids:
                 tag_ids.append(tid)
+    # ...and another plugin's tags survive the replace whatever that setting
+    # says -- they record what the media IS, not how the user annotated it.
+    if protected_tags:
+        protected_tags.merge_into(tag_ids, existing_tag_ids)
 
     update = {
         "title": title,
@@ -841,7 +915,8 @@ def group_media_by_post(db, user_id, all_scenes, all_images):
 
 def sync_collection_galleries(client, db, profile, processor, studios, performers,
                               tags, studio_id, creator_ids, full_sync, workers,
-                              all_scenes, all_images, totals, source):
+                              all_scenes, all_images, totals, source,
+                              protected_tags=None):
     """One Stash gallery per creator-curated collection.
 
     Stash has no nested galleries and no gallery-to-group link, so a collection
@@ -913,6 +988,13 @@ def sync_collection_galleries(client, db, profile, processor, studios, performer
             # A plain sync only fills in missing images; a full sync also
             # refreshes the metadata, matching how post galleries behave.
             update = dict(gallery_input, id=existing["id"]) if full_sync else None
+            # This gallery's tag_ids is built from scratch (the site tag only),
+            # so a full sync would drop another plugin's tags outright.
+            if update is not None and protected_tags:
+                update["tag_ids"] = protected_tags.merge_into(
+                    list(update.get("tag_ids") or []),
+                    [t["id"] for t in existing.get("tags") or []],
+                )
 
             # As in build_post_galleries: Stash rejects addGalleryImages on a
             # folder-based gallery, so only its metadata is ours to set.
@@ -946,7 +1028,7 @@ def build_post_galleries(client, db, profile, processor, performers, tags,
                          tag_matcher, studio_id, creator_ids, creator_roles,
                          creator_name, full_sync, keep_manual_edits, workers,
                          all_scenes, all_images, totals, source,
-                         creator_sponsor=False):
+                         creator_sponsor=False, protected_tags=None):
     """Group a creator's media by post and make one gallery per post.
 
     A gallery is created when a post has 2+ images, or an image alongside a video
@@ -1006,6 +1088,14 @@ def build_post_galleries(client, db, profile, processor, performers, tags,
                         if t["id"] not in merged_tags:
                             merged_tags.append(t["id"])
                     gallery_input["tag_ids"] = merged_tags
+                # Another plugin's tags survive regardless of keepManualEdits:
+                # a gallery comic-reader marked as a Webtoon must not stop being
+                # one because this plugin re-derived the post's tags.
+                if protected_tags:
+                    protected_tags.merge_into(
+                        gallery_input.setdefault("tag_ids", []),
+                        [t["id"] for t in existing.get("tags") or []],
+                    )
                 gallery_input["id"] = existing["id"]
 
             # A folder-based gallery already IS its folder's contents, and Stash
@@ -1210,7 +1300,8 @@ def _folder_gallery_task(client, update):
 
 def process_profile(client, db, profile, processor, studios, performers, tags,
                     tag_matcher, full_sync, tag_only, crew_only, multiple_ok,
-                    skip_multi_file, keep_manual_edits, workers, totals, source):
+                    skip_multi_file, keep_manual_edits, workers, totals, source,
+                    protected_tags=None):
     user_id = profile["user_id"]
     username = profile["username"]
     log.LogInfo("Processing {} {} (user_id {})".format(
@@ -1368,7 +1459,7 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
                 db, processor, profile, media_row, performer_ids, studio_id,
                 performers, tags, tag_matcher, kind, creator_roles, creator_name,
                 source, existing_perf, existing_tags, keep_manual_edits,
-                creator_sponsor,
+                creator_sponsor, protected_tags,
             )
         update["id"] = stash_id
         media_tasks.append(_media_task(client, kind, update))
@@ -1385,14 +1476,14 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
             client, db, profile, processor, performers, tags, tag_matcher,
             studio_id, performer_ids, creator_roles, creator_name, full_sync,
             keep_manual_edits, workers, all_scenes, all_images, totals, source,
-            creator_sponsor,
+            creator_sponsor, protected_tags,
         )
         # Creator-curated collections (Patreon only; every other source returns
         # none), flattened into one gallery each.
         sync_collection_galleries(
             client, db, profile, processor, studios, performers, tags, studio_id,
             performer_ids, full_sync, workers, all_scenes, all_images, totals,
-            source,
+            source, protected_tags,
         )
         # Stash's own folder galleries (one per scanned image folder) arrive with
         # no performer, studio or real title -- adopt them too.
@@ -1629,6 +1720,13 @@ def main():
         client, auto_create and not crew_only, crew_tag_id, sponsor_tag_id
     )
     tags = TagResolver(client)
+    # Resolved once per run, not per creator: it is two reads, and the tag tree
+    # cannot change underneath a single sync in any way worth tracking. The
+    # tag-only and crew passes only ever ADD tags, so they need no protection --
+    # but it is built for them anyway rather than made conditional, since the
+    # cost is trivial and a mode that starts replacing tags later would
+    # otherwise silently lose it.
+    protected_tags = ProtectedTags(client)
     # The tag-only task always matches tags from text; the regular sync only
     # does so when the setting is enabled.
     tag_matcher = None
@@ -1677,6 +1775,7 @@ def main():
                     client, db, profile, processor, studios, performers, tags,
                     tag_matcher, full_sync, tag_only, crew_only, multiple_ok,
                     skip_multi_file, keep_manual_edits, workers, totals, source,
+                    protected_tags,
                 )
         except Exception as e:
             log.LogError("Error processing {}: {}".format(db_path, e))

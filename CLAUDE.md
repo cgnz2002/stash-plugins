@@ -313,6 +313,26 @@ run, so there is no per-site task:
   so re-runs write nothing. The creator is matched by whole **path segment**, not
   substring, because Stash's `path` filter is a substring match and would
   otherwise let `jake` claim `/data/jakeson/...`.
+- **`ProtectedTags` — another plugin's tags are not ours to delete.** A
+  sync/full pass replaces `tag_ids`, and `keepManualEdits` (off by default)
+  protects the *user's* manual tags, which is a different question from another
+  plugin's bookkeeping. `comic-reader` marks comics with a tag tree (parent
+  `Comic`, children `Webtoon` on galleries and `Comic Page` on their images) and
+  keeps the parent's id in its own settings, so a Full Sync over shared media
+  was silently deleting the record of what a gallery *is*. `ProtectedTags` reads
+  `comicTagId` from `configuration { plugins }` -> `comic-reader` once per run
+  and expands it with `findTags(parents: {value: [id], modifier: INCLUDES,
+  depth: -1})` — **`depth: -1` means all levels**; any fixed number silently
+  truncates a deeper tree. Those ids are then re-added at the three replacing
+  sites (`build_update`, the post-gallery merge, `sync_collection_galleries` —
+  the last builds `tag_ids` from the site tag alone, so it would drop them
+  outright) **regardless of `keepManualEdits`**. Discovery is by id, never by
+  name, so renaming the tags can't break it; an absent or unconfigured
+  comic-reader yields an empty set and every path behaves exactly as before. A
+  failed descendant lookup keeps the parent rather than protecting nothing. The
+  `tag` and `crew` passes only ever add tags, so they are deliberately not
+  wired — `tests/test_protected_tags.py` asserts that too, so "wire it
+  everywhere" doesn't get done reflexively.
 - **Non-destructive sync** — by default a sync/full pass *replaces* a media's
   `performer_ids` and `tag_ids` with the post's derived values, so a Full Sync
   drops manually-added performers/tags. The **Keep Manual Performers & Tags**

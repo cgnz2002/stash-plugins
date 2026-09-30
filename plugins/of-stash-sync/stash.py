@@ -160,6 +160,28 @@ class StashClient:
         plugins = (data.get("configuration") or {}).get("plugins") or {}
         return plugins.get(plugin_id) or {}
 
+    # ----- tags ----------------------------------------------------------
+
+    def find_tag_descendants(self, tag_id):
+        """Ids of every tag beneath `tag_id`, at any depth (excluding itself).
+
+        `depth: -1` on a hierarchical criterion means "all levels" in Stash;
+        any other value is a fixed number of levels, so a tag tree deeper than
+        the guess would be silently cut off.
+        """
+        query = """
+        query FindTags($f: TagFilterType!) {
+            findTags(tag_filter: $f, filter: { per_page: -1 }) {
+                tags { id }
+            }
+        }
+        """
+        variables = {"f": {"parents": {
+            "value": [tag_id], "modifier": "INCLUDES", "depth": -1,
+        }}}
+        tags = self.call(query, variables)["findTags"]["tags"]
+        return [t["id"] for t in tags]
+
     # ----- studios -------------------------------------------------------
 
     def find_studio(self, name):

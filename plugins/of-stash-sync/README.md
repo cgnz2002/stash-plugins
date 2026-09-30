@@ -153,7 +153,7 @@ Both current and older OF-Scraper database layouts are supported.
 | Max Title Length | `65` | Titles longer than this are truncated at a sentence or word boundary. |
 | Allow Multiple Performer Matches | off | If several performers match a username, attach all of them instead of skipping. |
 | Create Missing Performers | off | Create a sparse performer for the creator and any unmatched `@mentions` instead of skipping. |
-| Keep Manual Performers & Tags | off | Sync is **non-destructive** to performers and tags: it **merges** them instead of replacing, so anything you added by hand survives a Full Sync (or the per-performer button), while the post's creator/@mentions and tags are added alongside. Everything else (title, details, date, studio, URL) is still updated. Crew are still moved out of the performers list on scenes/images. Turn this on if you manually curate performers/tags. |
+| Keep Manual Performers & Tags | off | Sync is **non-destructive** to performers and tags: it **merges** them instead of replacing, so anything you added by hand survives a Full Sync (or the per-performer button), while the post's creator/@mentions and tags are added alongside. Everything else (title, details, date, studio, URL) is still updated. Crew are still moved out of the performers list on scenes/images. Turn this on if you manually curate performers/tags. Tags belonging to the Comic Reader plugin are kept either way — see below. |
 | Sync Workers | `2` | How many scene/image/gallery writes to send to Stash at once. Stash is SQLite-backed and SQLite has a **single writer**, so parallel writes queue on the DB write lock rather than truly committing at once; a little concurrency hides latency but too much piles up transactions until they time out (and starves the rest of Stash). Writes retry automatically on transient "database is locked" / "FOREIGN KEY constraint" / "timed out" contention. **If you see those errors on a big Full Sync, lower this** — `1` (fully sequential) is safest. Range 1–16. |
 | Auto-tag From Post Text | off | Scan each post's text and attach any existing Stash tags whose name or alias appears in it. |
 | Skip Multi-file Scenes and Images | off | Sync and Full Sync skip any scene or image with more than one file (e.g. merged scenes), to protect their performers and metadata. Does not affect the Tag task. **Does not apply to Patreon** — see below. |
@@ -276,6 +276,22 @@ Patreon works differently from the other two and it's worth knowing how:
   images and linking every member post's scenes. Keyed by collection URL, so
   renaming a collection on Patreon updates the gallery instead of making a
   second one.
+
+### Comic Reader tags are never removed
+
+If you also run the **Comic Reader** plugin, the tags it uses to mark comics —
+its `Comic` tag and everything beneath it, such as `Webtoon` and `Comic Page` —
+are kept on any scene, image or gallery this plugin syncs, **whether or not
+*Keep Manual Performers & Tags* is on**.
+
+A sync normally replaces a media's tags with the ones derived from the post,
+which is how a re-sync corrects stale tags. But those tags record what a piece
+of media *is*, not how you annotated it, and losing them would stop Stash
+knowing a gallery was a comic at all — with nothing in the log to say so.
+
+The tag is found by **id**, read from Comic Reader's own settings, so renaming
+it changes nothing. If Comic Reader isn't installed, or its Comic tag isn't
+configured, nothing is protected and syncing behaves exactly as before.
 
 #### Duplicates across tiers, and Skip Multi-file
 
