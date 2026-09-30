@@ -888,6 +888,34 @@ def is_outside(paths, roots):
     )
 
 
+def plugin_wrote_this(item, source):
+    """Whether this plugin is what put its metadata on `item`.
+
+    A studio somewhere under the site's parent studio is NOT evidence. Users
+    nest their OWN studios there -- a real library had `ZacknRhys`,
+    `Gang Bang Guys`, `Juice Anime` and others filed under `OnlyFans (network)`,
+    holding hand-curated media this plugin never touched. Selecting on the
+    studio tree alone swept all of it into the cleanup, which would have
+    stripped titles, dates, tags and the organized flag from media whose only
+    sin was being filed sensibly.
+
+    The test is a **post URL on the site's own domain**, which `build_update`
+    writes and nothing else does. The site tag is deliberately NOT enough: a
+    user filing torrented OnlyFans content under `<creator> (OnlyFans)` may
+    reasonably tag it `OnlyFans` too, and those studios ARE real creators, so
+    neither the studio name nor the tag distinguishes their work from ours.
+    Nobody hand-types `patreon.com/posts/12345` onto a torrent download.
+
+    Biased towards leaving things alone: a missed stray keeps some wrong
+    metadata until someone fixes it by hand, while a false positive destroys
+    curation that cannot be recovered.
+    """
+    for url in item.get("urls") or []:
+        if source.link_domain and source.link_domain in (url or ""):
+            return True
+    return False
+
+
 def build_cleanup_update(item, kind, source, username, tags):
     """Undo what a stray sync wrote onto one media, or None if nothing to undo.
 
@@ -980,7 +1008,7 @@ def cleanup_stray_media(client, configured, tags, workers, totals):
     log.LogInfo("Looking for stray media outside: {}".format(", ".join(roots)))
 
     tasks = []
-    by_creator = {}
+    skipped_not_ours = 0
     for source, _path in configured:
         if not source.parent_id:
             continue
@@ -994,12 +1022,16 @@ def cleanup_stray_media(client, configured, tags, workers, totals):
             for item in items:
                 if not is_outside(_media_paths(item), roots):
                     continue
+                # A studio under the parent is not evidence the plugin wrote
+                # this -- users nest their own studios there too.
+                if not plugin_wrote_this(item, source):
+                    skipped_not_ours += 1
+                    continue
                 studio_name = ((item.get("studio") or {}).get("name") or "")
                 username = studio_name.split(" (")[0]
                 update = build_cleanup_update(item, kind, source, username, tags)
                 if update is None:
                     continue
-                by_creator[studio_name] = by_creator.get(studio_name, 0) + 1
                 paths = _media_paths(item)
                 # The studio names the creator whose username matched this
                 # path, which is the only thing that explains why the file was
@@ -1010,19 +1042,17 @@ def cleanup_stray_media(client, configured, tags, workers, totals):
                     paths[0] if paths else "(no path)"))
                 tasks.append(_media_task(client, kind, update))
 
+    if skipped_not_ours:
+        log.LogInfo(
+            "Left alone: {} item(s) outside the data paths that carry one of "
+            "these studios but none of this plugin's own metadata -- not this "
+            "plugin's work, most likely your own studios filed under the same "
+            "parent"
+            .format(skipped_not_ours))
     if not tasks:
         log.LogInfo("No stray media found.")
         return
     log.LogInfo("{} stray item(s) to clean up".format(len(tasks)))
-    # Which creators' names were doing the over-matching, worst first. Without
-    # this the list reads as inexplicable -- the folder names belong to content
-    # the user never subscribed to, and only the creator whose handle is a
-    # substring of that path explains why any of it was touched. It also says
-    # which handles to watch: a short one matches inside ordinary words.
-    if by_creator:
-        log.LogInfo("Stray media by creator (their name matched these paths):")
-        for name, count in sorted(by_creator.items(), key=lambda kv: -kv[1]):
-            log.LogInfo("  {} -- {} item(s)".format(name or "(no studio)", count))
     run_writes(tasks, workers, totals)
 
 
