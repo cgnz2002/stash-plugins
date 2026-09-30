@@ -156,6 +156,14 @@ kind, update = client.updated[0]
 assert kind == "image" and update["id"] == "img1", client.updated
 assert totals["images"] == 1, totals
 
+# The studio must reach the log and the tally: it names the creator whose
+# handle matched a path the user doesn't recognise, which is the only thing
+# that explains why the file was touched at all.
+src = open(plugin_file("sync.py"), encoding="utf-8").read()
+assert "Stray media by creator" in src
+assert "by_creator[studio_name]" in src
+assert "studio_name or \"no studio\"" in src
+
 # no parent studio resolved -> the plugin can't identify its own writes, so it
 # does nothing rather than guessing
 P.parent_id = None

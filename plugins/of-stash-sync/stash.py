@@ -45,24 +45,37 @@ def _summarize(payload):
     parts = []
     if payload.get("id"):
         parts.append("id={}".format(payload["id"]))
+    # A field that is PRESENT but empty is a field being cleared -- which is a
+    # change, and on the cleanup pass it is nearly every change there is.
+    # Testing truthiness alone rendered "clear the studio, title and organized
+    # flag" as a bare "id=123", so a preview of a destructive pass showed
+    # nothing at all. Absent still means untouched; empty now says so.
     for key in ("title", "name", "date", "code", "director", "photographer"):
-        if payload.get(key):
-            parts.append("{}={!r}".format(key, payload[key]))
-    if payload.get("urls"):
-        parts.append("url={}".format(payload["urls"][0]))
-    if payload.get("studio_id"):
-        # A studio this run would have created has no real id yet; "(new)" says
-        # that, where a bare 0 would just look like a bug in the preview.
-        parts.append("studio={}".format(
-            "(new)" if payload["studio_id"] == DRY_RUN_ID else payload["studio_id"]))
+        if key not in payload:
+            continue
+        parts.append("{}={!r}".format(key, payload[key]) if payload[key]
+                     else "{}=(cleared)".format(key))
+    if "urls" in payload:
+        urls = payload["urls"] or []
+        parts.append("url={}".format(urls[0]) if urls else "url=(cleared)")
+    if "studio_id" in payload:
+        if not payload["studio_id"]:
+            parts.append("studio=(cleared)")
+        else:
+            # A studio this run would have created has no real id yet; "(new)"
+            # says that, where a bare 0 would just look like a preview bug.
+            parts.append("studio={}".format(
+                "(new)" if payload["studio_id"] == DRY_RUN_ID
+                else payload["studio_id"]))
     for key, label in (("performer_ids", "performers"), ("tag_ids", "tags"),
                        ("scene_ids", "scenes"), ("ids", "images")):
         if key in payload and isinstance(payload[key], list):
             parts.append("{}={}".format(label, len(payload[key])))
-    if payload.get("details"):
-        parts.append("details[{}]".format(len(payload["details"])))
-    if payload.get("organized"):
-        parts.append("organized")
+    if "details" in payload:
+        parts.append("details[{}]".format(len(payload["details"]))
+                     if payload["details"] else "details=(cleared)")
+    if "organized" in payload:
+        parts.append("organized" if payload["organized"] else "organized=false")
     return ", ".join(parts) or "(no fields)"
 
 
