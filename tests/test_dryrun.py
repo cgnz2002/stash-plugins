@@ -88,6 +88,30 @@ assert stash._summarize(None) == "(no fields)"
 assert "images=3" in stash._summarize({"id": "g1", "ids": ["a", "b", "c"]})
 
 
+# --- a CLEAR is a change, and must be visible -------------------------------
+# Only testing truthiness rendered "clear the studio, title and organized flag"
+# as a bare "id=123". The cleanup pass is almost entirely clears, so its
+# preview showed nothing at all for the writes it was about to make.
+cleared = stash._summarize({
+    "id": "91392", "studio_id": None, "title": "", "organized": False,
+    "details": "", "date": None, "code": "", "urls": [], "director": "",
+})
+for expect in ["id=91392", "studio=(cleared)", "title=(cleared)",
+               "organized=false", "details=(cleared)", "date=(cleared)",
+               "code=(cleared)", "url=(cleared)", "director=(cleared)"]:
+    assert expect in cleared, (expect, cleared)
+
+# an ABSENT field still means untouched, and says nothing
+assert stash._summarize({"id": "1"}) == "id=1"
+assert "studio" not in stash._summarize({"id": "1", "title": "x"})
+assert "organized" not in stash._summarize({"id": "1"})
+
+# and setting a value still reads as a value, not a clear
+assert "organized" in stash._summarize({"organized": True})
+assert "organized=false" not in stash._summarize({"organized": True})
+assert "title='x'" in stash._summarize({"title": "x"})
+
+
 # --- with dry run OFF a mutation is NOT short-circuited --------------------
 c = client(False)
 try:
