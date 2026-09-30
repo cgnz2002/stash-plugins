@@ -184,25 +184,6 @@
 .cr-info-section {
   margin-bottom: 1rem;
 }
-.cr-info-people {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-}
-.cr-info-person {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  color: inherit;
-}
-.cr-reader .cr-info .cr-info-person img {
-  width: 40px;
-  height: 40px;
-  flex: none;
-  border-radius: 50%;
-  object-fit: cover;
-  object-position: top;
-}
 .cr-info-links {
   display: flex;
   flex-wrap: wrap;

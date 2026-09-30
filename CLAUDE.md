@@ -607,7 +607,10 @@ its README. What matters when changing it:
   `CR.criterionParam` must encode exactly as Stash's `getEncodedParams` does
   (braces outside strings become parentheses); the test decodes it with a
   copy of Stash's own `translateJSON`. `RatingSystem` arrives with the
-  `Galleries` chunk, so the panel loads that. Two theme lessons: the panel is
+  `Galleries` chunk, so the panel loads that, along with Stash's `Date`.
+  Performers use the exact `performer-tag-container` markup of Stash's
+  scene list; links are plain buttons because the gallery page shows none
+  and `ExternalLinksButton` portals its menu behind the reader. Two theme lessons: the panel is
   an `aside` that owns position, with a `.card` inside for the surface only
   (refract's `.card` sets `position: relative` and full-width images, which
   wrecked a positioned card), and a dark scrim sits behind that card because

@@ -7,9 +7,13 @@
 // Comics page filtered by it. Editing and file details stay on the gallery
 // page, one click away.
 //
-// Built from Stash's parts where they are exposed (RatingSystem, and the
-// tag-item / badge markup TagLink renders), so the rating follows the user's
-// stars-or-decimal setting and a theme styles it all.
+// Built from Stash's own parts: RatingSystem (follows the user's stars or
+// decimal setting) and Date, and where a part isn't exposed to plugins, its
+// exact markup -- performers as in Stash's scene list details
+// (performer-tag-container), tags as TagLink renders them -- so a theme
+// styles all of it. Links are plain Stash buttons: the gallery page shows no
+// links, and Stash's ExternalLinksButton opens its menu on document.body,
+// behind the full-screen reader.
 (function () {
   "use strict";
 
@@ -19,8 +23,8 @@
   var h = CR.h;
   var api = CR.api;
 
-  // RatingSystem arrives with Stash's Galleries chunk (the Comics page loads
-  // it too); a reader opened directly from a link has loaded nothing yet.
+  // RatingSystem and Date arrive with Stash's Galleries chunk (the Comics page
+  // loads it too); a reader opened directly from a link has loaded nothing.
   CR.useInfoComponents = function () {
     var use = api.hooks && api.hooks.useLoadComponents;
     var lc = api.loadableComponents || {};
@@ -106,6 +110,7 @@
     var rating = React.useState(g.rating100 == null ? null : g.rating100);
     var family = props.family || [];
     var Rating = !loading && api.components.RatingSystem;
+    var StashDate = !loading && api.components.Date;
 
     function setRating(v) {
       var prev = rating[0];
@@ -121,10 +126,10 @@
     var urls = g.urls || [];
     var logo = studioLogo(g.studio);
     var meta = [
-      g.date ? CR.formatDate(g.date) : null,
       props.pages + (props.pages === 1 ? " page" : " pages"),
       props.layout === "scroll" ? "Webtoon" : null,
     ].filter(Boolean).join(" · ");
+    var date = g.date ? (StashDate ? h(StashDate, { value: g.date }) : CR.formatDate(g.date)) : null;
 
     // The aside places the panel; the .card inside is only its surface, so a
     // theme's card styling (colour, blur, border) applies without its card
@@ -139,11 +144,11 @@
               tabLinkProps(history, "studio", g.studio.id)),
               logo ? h("img", { src: logo, alt: g.studio.name }) : g.studio.name)
           : h("span", null),
-        h("button", { type: "button", className: "btn btn-secondary btn-sm cr-info-close",
-                      title: "Hide details (I)", onClick: props.onClose },
+        h(CR.Button, { variant: "secondary", size: "sm", className: "cr-info-close",
+                       title: "Hide details (I)", onClick: props.onClose },
           h(CR.Icon, { name: "faXmark" }))),
       h("h3", { className: "cr-info-title" }, CR.galleryTitle(g)),
-      h("div", { className: "cr-info-meta text-muted" }, meta),
+      h("div", { className: "cr-info-meta text-muted" }, date, date ? " · " : null, meta),
       Rating ? h("div", { className: "cr-info-rating" },
         h(CR.Boundary, { name: "rating" },
           h(Rating, { value: rating[0], onSetRating: setRating, clickToRate: true, withoutContext: true })))
@@ -152,11 +157,13 @@
       h(Section, { show: performers.length > 0, title: performers.length === 1 ? "Performer" : "Performers" },
         h("div", { className: "cr-info-people" },
           performers.map(function (p) {
-            return h("a", Object.assign({ key: p.id, className: "cr-info-person", title: "Comics with " + p.name },
-              tabLinkProps(history, "performer", p.id)),
-              p.image_path ? h("img", { src: p.image_path, alt: "", loading: "lazy" }) : null,
-              h("span", null, p.name,
-                p.disambiguation ? h("span", { className: "text-muted" }, " (" + p.disambiguation + ")") : null));
+            var link = tabLinkProps(history, "performer", p.id);
+            var name = p.name + (p.disambiguation ? " (" + p.disambiguation + ")" : "");
+            return h("div", { key: p.id, className: "performer-tag-container row" },
+              h("a", Object.assign({ className: "performer-tag col m-auto zoom-2", title: "Comics with " + p.name }, link),
+                h("img", { loading: "lazy", className: "image-thumbnail", alt: p.name, src: p.image_path || "" })),
+              h("span", { className: "tag-item badge badge-secondary d-block" },
+                h("a", Object.assign({ title: "Comics with " + p.name }, link), name)));
           }))),
       h(Section, { show: tags.length > 0, title: "Tags" },
         h("div", { className: "cr-info-tags" },
