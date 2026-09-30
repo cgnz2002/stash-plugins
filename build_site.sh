@@ -16,7 +16,17 @@ fi
 rm -rf "$outdir"
 mkdir -p "$outdir"
 
-buildPlugin() 
+# Emit a value safe to put after "key:" in the index. The name and description
+# come from a plugin manifest and are otherwise interpolated raw, so a value
+# starting with a YAML indicator -- "[DEPRECATED] ..." parses as a flow sequence
+# -- or containing ": " produced an index.yml that would not parse AT ALL,
+# breaking the whole source for every user over one plugin's wording.
+yamlQuote()
+{
+    printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+}
+
+buildPlugin()
 {
     f=$1
     # get the plugin id from the directory
@@ -45,9 +55,9 @@ buildPlugin()
 
     # write to spec index
     echo "- id: $plugin_id
-  name: $name
+  name: $(yamlQuote "$name")
   metadata:
-    description: $description
+    description: $(yamlQuote "$description")
   version: $version
   date: $updated
   path: $plugin_id.zip

@@ -1,6 +1,6 @@
-name: Patreon Metadata Sync
-description: Sync Patreon post metadata (title, description, date, URL, studio, creator performer) onto matching Stash galleries and the images inside them, reading patreon-dl's on-disk post_info files directly, and build a gallery per Patreon collection.
-version: 3.2.0
+name: DEPRECATED - Patreon Metadata Sync
+description: "DEPRECATED - DO NOT INSTALL. Patreon is now synced by Fan Site Metadata Sync (of-stash-sync) alongside OnlyFans and JustFor.Fans, which is actively maintained and has since gained fixes this plugin does not have. Set its Patreon Data Path and use its Sync Patreon Only / Full Sync Patreon Only tasks instead. Don't run both plugins over the same library. This one remains only so existing installs keep working, and will be removed."
+version: 3.3.0
 url: https://github.com/cgnz2002/stash-plugins
 
 settings:
@@ -33,19 +33,19 @@ errLog: error
 
 tasks:
   - name: Sync Patreon Metadata
-    description: Sync metadata onto unorganized Patreon galleries and images, and build collection galleries.
+    description: DEPRECATED - use 'Sync Patreon Only' in Fan Site Metadata Sync instead. Syncs metadata onto unorganized Patreon galleries and images, and builds collection galleries.
     defaultArgs:
       mode: sync
   - name: Full Sync Patreon Metadata
-    description: Re-sync ALL Patreon galleries and images (ignoring the organized flag) and rebuild collection galleries.
+    description: DEPRECATED - use 'Full Sync Patreon Only' in Fan Site Metadata Sync instead. Re-syncs ALL Patreon galleries and images (ignoring the organized flag) and rebuilds collection galleries.
     defaultArgs:
       mode: full
   - name: Tag Patreon From Text
-    description: Add tags from post text to ALL Patreon galleries and images. Only adds tags, leaves every other field untouched. Safe for manually edited galleries.
+    description: DEPRECATED - use 'Tag From Text' in Fan Site Metadata Sync instead. Adds tags from post text to ALL Patreon galleries and images, leaving every other field untouched.
     defaultArgs:
       mode: tag
   - name: Preview (Dry Run)
-    description: Preview a full sync in the log without writing anything to Stash - lists every gallery/image it would update and every studio/performer/collection gallery it would create. Safe to run first.
+    description: DEPRECATED - use 'Preview Patreon (Dry Run)' in Fan Site Metadata Sync instead. Previews a full sync in the log without writing anything to Stash.
     defaultArgs:
       mode: full
       dryRun: true
