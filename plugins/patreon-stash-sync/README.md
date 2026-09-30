@@ -1,4 +1,4 @@
-# Patreon Metadata Sync (Stash plugin)
+# DEPRECATED — Patreon Metadata Sync (Stash plugin)
 
 > ## ⚠️ Deprecated — superseded by Fan Site Metadata Sync
 >
@@ -6,9 +6,14 @@
 > alongside OnlyFans and JustFor.Fans, from the same Sync and Full Sync tasks,
 > plus a **Sync Patreon Only** task.
 >
-> This plugin is kept for one release as a fallback and **will be removed**.
-> Don't run both: set *Patreon Data Path* on the other plugin, run its tasks,
-> and once you're happy, uninstall this one.
+> This plugin is kept only so existing installs keep working, and **will be
+> removed**. Don't run both: set *Patreon Data Path* on the other plugin, run
+> its tasks, and once you're happy, uninstall this one.
+>
+> It is **frozen** — every Patreon fix since has gone into the replacement only,
+> including several that lose data here: `embed/` video never syncing at all,
+> the same filename in two post folders taking the wrong post's metadata, and
+> merged duplicate images being skipped outright.
 >
 > **Two bugs are fixed only in the replacement**, so this version is not the one
 > to keep using:

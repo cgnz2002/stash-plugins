@@ -33,7 +33,16 @@ Currently there are two plugins (the Patreon one is being retired — see
   deliberate: Stash keys plugin settings by plugin id, so keeping it preserves
   every existing install's configuration.** The per-site differences live in
   `sources.py`; see *Multi-site architecture* below.
-- **`plugins/patreon-stash-sync/`** — Patreon Metadata Sync. Syncs metadata for
+- **`plugins/patreon-stash-sync/`** — **DEPRECATED and frozen.** Its manifest
+  `name` and every task description say so, so Stash shows it in the plugin
+  list and Tasks page; it stays published rather than being dropped from the
+  index, because removing it would break *Check for Updates* for anyone who
+  still has it installed. Don't port fixes to it — every Patreon fix since the
+  merge has gone into `of-stash-sync` only. **Its manifest `name` must not
+  start with a YAML indicator** such as `[`: `build_site.sh` interpolates it
+  into `index.yml`, and an unparseable index breaks the source for every user,
+  including the plugins that were fine. `tests/test_build_index.py` guards
+  this. Historically: Patreon Metadata Sync, which syncs metadata for
   Patreon content downloaded with
   [patreon-dl](https://github.com/patrickkfkan/patreon-dl). Unlike of-stash-sync,
   there is **no database step**: patreon-dl writes each post's metadata beside the
