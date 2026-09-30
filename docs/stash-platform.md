@@ -11,8 +11,9 @@ something at all.
 
 ## How to verify a claim about Stash
 
-There is no Stash checkout here and the plugins run against a server we can't
-query, so **read the source at the pinned tag**:
+Two ways: read the source at the pinned tag, or run the real thing (see
+*Running a real Stash* below) -- which is how several entries here were
+corrected. The source first:
 
 ```
 https://raw.githubusercontent.com/stashapp/stash/v0.31.0/<path>
@@ -69,10 +70,103 @@ Two limits worth knowing before designing around hooks:
 
 - **Every hook is `.Post`.** There is no `.Pre` trigger, so a hook cannot veto
   or rewrite a change on its way in — only react after it has happened.
-- **Scan hooks do not exist.** The source carries the comment *"Scan-related
-  hooks are currently disabled until post-hook execution is integrated."* So
-  there is no way to run code as files are ingested; a plugin has to be
-  triggered afterwards.
+- **Scans DO fire the create hooks** -- despite `hooks.go` carrying the
+  comment *"Scan-related hooks are currently disabled until post-hook execution
+  is integrated."* That comment is stale: `pkg/gallery/scan.go` and
+  `pkg/image/scan.go` call `RegisterPostHooks(..., GalleryCreatePost / ImageCreatePost, nil, nil)`,
+  and scanning a `.cbz` on v0.31.1 fired `Gallery.Create.Post` once and
+  `Image.Create.Post` per page, each with `"input": null`. (Verified with a
+  throwaway hook plugin logging its `hookContext`.) They are create hooks, so
+  files Stash already knows don't fire them again. comic-reader relies on this.
+- **Hooks run inside the triggering request**, one after another, so a slow
+  hook slows the scan or mutation that fired it. That is why comic-reader's
+  hooks are embedded JS rather than a `raw` process per event.
+
+## Embedded JavaScript plugins (`interface: js`)
+
+Verified on v0.31.1 (`pkg/plugin/js.go`, `pkg/javascript/*.go`) and by running
+comic-reader:
+
+- `exec: [script.js]` is relative to the manifest. Globals: `input`
+  (`input.Args` holds the args; a hook's `hookContext` is in there), `log`
+  (`Trace/Debug/Info/Warn/Error/Progress`), `gql.Do(query, vars)` (returns
+  `data`, throws on GraphQL errors) and `util.Sleep`. The script's final value
+  is the result: return `{Output: ..., Error: ...}` (capitalised).
+- `gql.Do` goes straight to Stash's GraphQL handler in-process with the
+  session cookie -- no network, and cheap enough for per-image hooks.
+- **`log.Progress` blocks forever unless the plugin runs as a queued task.**
+  It sends on a channel that is nil for hooks and `runPluginOperation`. Gate
+  it behind an arg only the manifest's tasks pass.
+- The runtime is goja; keep backend code to ES5 to stay safe across the goja
+  versions Stash has shipped.
+
+## Running plugins: calls and outcomes
+
+- `runPluginOperation(plugin_id, args)` runs a plugin **synchronously** and
+  returns its output (an `error` becomes a GraphQL error). It ignores the
+  manifest's `defaultArgs`. Handy as a test harness and for UI → backend calls.
+- `runPluginTask(plugin_id, task_name, args_map)` queues a job. A task that
+  returns `{"error": ...}` is logged at error level, but **the job ends
+  FINISHED, not FAILED** -- only an unknown task name etc. fails the job.
+
+## Filtering quirks
+
+- **`NOT` over a sub-filter is evaluated per joined row, not per object.** An
+  image in one comic gallery and one other gallery matches BOTH
+  `galleries_filter: {tags: comic}` and `NOT: {galleries_filter: {tags: comic}}`
+  (v0.31.1, reproduced against a live server). Use such a `NOT` only as a
+  candidate list and check membership in code.
+- **Default filters are per view**, stored at
+  `configuration.ui.defaultFilters.<view>` and written with
+  `configureUISetting(key: "defaultFilters.<view>", value: {mode, find_filter, object_filter, ui_options})`.
+  Performer, studio and tag pages have their own views (`performer_galleries`,
+  `studio_images`, `tag_galleries`, ...), so the main Galleries page's default
+  doesn't reach a performer's Galleries tab.
+- A saved **tags** criterion is `{modifier: "INCLUDES", value: {items: [{id,label}], excluded: [{id,label}], depth}}`.
+  The UI has no EXCLUDES modifier for tags any more; exclusions live in
+  `excluded`. `depth: -1` includes child tags.
+- The `path` filter is a case-insensitive substring match, on images it can
+  match more loosely than expected -- re-check paths in code.
+
+## UI plugins: what is and isn't patchable (v0.31.1)
+
+Found by reading the shipped bundle (`/assets/*.js`), not the docs:
+
+- `MainNavBar.MenuItems` is rendered **once** and sits inside the router --
+  a good home for a nav item and for any always-mounted helper component.
+  `MainNavBar.UtilityItems` is rendered **twice** (desktop and mobile), so
+  anything mounted there runs twice.
+- `PluginRoutes` / `register.route` is react-router **v5**:
+  `<Route path={p} component={C}/>`, prefix-matching.
+- Patchable around galleries/performers: `GalleryCard*`, `GalleryList`,
+  `FilteredGalleryList`, `PerformerPage`, `PerformerGalleriesPanel`,
+  `PerformerImagesPanel`, `StudioDetailsPanel`, `FrontPage`, card grids and
+  recommendation rows. **Not** patchable: the performer/studio tab list, the
+  studio page as a whole, and the gallery page -- add to those by finding the
+  rendered element and portalling into it (`ReactDOM.createPortal` keeps the
+  router and contexts).
+- Performer/studio pages redirect an unknown tab segment
+  (`/performers/1/comics` → `/performers/1/galleries`), so an injected tab
+  can't have its own URL.
+- Stash's own inputs use `clearable-text-field form-control` (text) and
+  `btn-secondary form-control` (select); plain `form-control` renders white.
+
+## Running a real Stash
+
+A session can run the actual server; the release binary is self-contained:
+
+```
+curl -sSL -o stash-linux https://github.com/stashapp/stash/releases/download/v0.31.1/stash-linux
+chmod +x stash-linux && ./stash-linux --config config.yml --nobrowser
+```
+
+With a `config.yml` that sets `stash: [{path: <library>}]`, `database`,
+`generated`, `cache`, `blobs_path`, `plugins_path: <repo>/plugins` (plugins
+load live from the working tree; `mutation { reloadPlugins }` after an edit)
+and **`port: 9998`** -- `tests/test_dryrun.py` expects nothing to be listening
+on 9999. `apt-get install ffmpeg` gives Stash ffprobe for video; `.cbz` and
+images scan without it. Node's Playwright (with the preinstalled Chromium)
+drives the UI; a fresh install shows a Release Notes modal to close first.
 
 ## Scrapers
 

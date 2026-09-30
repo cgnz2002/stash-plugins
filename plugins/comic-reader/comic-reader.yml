@@ -1,0 +1,70 @@
+name: Comic Reader
+description: A comics section, reader and performer/studio Comics tabs for Stash. Galleries tagged Comic (or Webtoon) are read as side-by-side page spreads or a continuous webtoon scroll, and hidden from the Galleries and Images pages. .cbz files are marked as comics automatically.
+version: 0.1.0
+url: https://github.com/cgnz2002/stash-plugins
+
+settings:
+  comicTagId:
+    displayName: Comic Tag ID
+    description: "The tag that marks a gallery as a comic. Filled in automatically the first time the plugin runs (an existing 'Comic' tag is reused). Only change it to point the plugin at a different tag."
+    type: STRING
+  webtoonTagId:
+    displayName: Webtoon Tag ID
+    description: "The tag that makes a comic read as one continuous vertical scroll. A child of the Comic tag, so tagging a gallery Webtoon alone is enough. Filled in automatically."
+    type: STRING
+  comicPageTagId:
+    displayName: Comic Page Tag ID
+    description: "Put on every image inside a comic, so the Images page can hide comic pages. Kept up to date by the plugin - you never need to add it yourself. Filled in automatically."
+    type: STRING
+  webtoonRatio:
+    displayName: Webtoon Page Ratio
+    description: "A comic without the Webtoon tag still opens as a scroll when its pages are this many times taller than they are wide (tall strips). Default: 2"
+    type: NUMBER
+
+exec:
+  - comic-reader.js
+interface: js
+
+hooks:
+  - name: Mark new comics
+    description: Marks a newly scanned .cbz gallery as a comic, and tags the pages of comics as they are added.
+    triggeredBy:
+      - Gallery.Create.Post
+      - Image.Create.Post
+    defaultArgs:
+      mode: hook
+  - name: Keep comic pages tagged
+    description: Adds or removes the Comic Page tag on a gallery's images when it is marked or unmarked as a comic, or deleted.
+    triggeredBy:
+      - Gallery.Update.Post
+      - Gallery.Destroy.Post
+    defaultArgs:
+      mode: hook
+
+tasks:
+  - name: Set Up Comics
+    description: Creates the Comic, Webtoon and Comic Page tags, marks every .cbz gallery as a comic, tags every comic's pages and hides comics from the Galleries and Images pages. Safe to run again at any time to repair things.
+    defaultArgs:
+      mode: setup
+      task: "true"
+  - name: Hide Comics from Galleries and Images
+    description: Sets the Galleries and Images pages' default filters to leave out comics and comic pages. Any other default filter settings you have are kept.
+    defaultArgs:
+      mode: hide
+      task: "true"
+  - name: Show Comics in Galleries and Images
+    description: Removes the comic exclusion from the Galleries and Images pages' default filters, leaving the rest of each filter as it was.
+    defaultArgs:
+      mode: show
+      task: "true"
+
+ui:
+  javascript:
+    - ui/common.js
+    - ui/reader.js
+    - ui/library.js
+    - ui/builder.js
+    - ui/inject.js
+    - ui/main.js
+  css:
+    - ui/comics.css
