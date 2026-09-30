@@ -752,4 +752,9 @@ Note `build_site.sh` globs `plugins/**/*.yml`, so **every** `.yml` under
   reasoning survives; note that `test_patreon.py` once asserted the *wrong*
   behaviour and so confirmed a bug instead of catching it, because it was
   written from the same bad premise as the code.
+- `tests/test_no_undefined_names.py` uses stdlib `symtable` to flag a name a
+  function resolves globally that the module never defines. Nothing else can
+  catch that: the plugin needs a live Stash to run, and `ast.parse` accepts an
+  undefined name happily -- so a `NameError` on a rarely-taken line reaches a
+  user. One did, on the last line of a cleanup run, after all its writes.
 - Commit messages: short imperative subject lines (see `git log`).
