@@ -1987,7 +1987,7 @@ def main():
         log.LogProgress(1.0)
         summary = "Cleanup complete. Items reverted: {}".format(
             totals["scenes"] + totals["images"])
-        if dry_run:
+        if client.dry_run:
             summary += " (dry run -- nothing was written)"
         log.LogInfo(summary)
         return None
