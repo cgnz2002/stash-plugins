@@ -1,0 +1,329 @@
+"""comic-reader: its manifest, and the pure logic of its JavaScript.
+
+The manifest half is plain Python. It guards the failures Stash reports only
+as a line in its log, if at all: Stash parses manifests strictly (one unknown
+key and the whole plugin fails to load), a missing ui/ file breaks the UI, and
+a misspelled hook trigger is accepted and then simply never fires.
+
+The logic half runs the plugin's own JavaScript under Node with stubbed
+globals -- Stash's `gql`/`log`/`input` for the backend, a bare `window` for the
+UI files -- and is skipped when Node isn't installed. The load-bearing case is
+removablePages(): Stash evaluates NOT over a galleries_filter per joined
+gallery, so the candidate query returns pages that ARE still in a comic, and
+trusting it stripped Comic Page from real comic pages.
+"""
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _plugin import REPO
+
+PLUGIN = os.path.join(REPO, "plugins", "comic-reader")
+MANIFEST = os.path.join(PLUGIN, "comic-reader.yml")
+
+# pkg/plugin/config.go (Stash v0.31)
+TOP_LEVEL = {"name", "description", "version", "url", "exec", "interface", "errLog",
+             "tasks", "hooks", "settings", "ui"}
+UI_KEYS = {"javascript", "css", "requires", "assets", "csp"}
+# pkg/plugin/hook/hooks.go (Stash v0.31)
+TYPES = ["Scene", "SceneMarker", "Image", "Gallery", "GalleryChapter", "Group", "Movie",
+         "Performer", "Studio", "Tag"]
+TRIGGERS = {"{}.{}.Post".format(t, op) for t in TYPES for op in ("Create", "Update", "Destroy")}
+TRIGGERS.add("Tag.Merge.Post")
+
+with open(MANIFEST, encoding="utf-8") as f:
+    text = f.read()
+lines = text.splitlines()
+
+# --- manifest -------------------------------------------------------------
+
+top = [re.match(r"^([A-Za-z]\w*):", l).group(1) for l in lines if re.match(r"^[A-Za-z]\w*:", l)]
+unknown = set(top) - TOP_LEVEL
+assert not unknown, "unknown top-level keys (Stash would refuse the plugin): {}".format(unknown)
+assert len(top) == len(set(top)), "duplicate top-level key: {}".format(top)
+assert re.search(r"^interface: js$", text, re.M), "the backend is an embedded JS plugin"
+
+
+def block(key):
+    """Lines of a top-level block, up to the next top-level key."""
+    out, inside = [], False
+    for l in lines:
+        if re.match(r"^[A-Za-z]\w*:", l):
+            inside = l.startswith(key + ":")
+            continue
+        if inside:
+            out.append(l)
+    return out
+
+
+ui = block("ui")
+ui_keys = {re.match(r"^  (\w+):", l).group(1) for l in ui if re.match(r"^  \w+:", l)}
+assert ui_keys <= UI_KEYS, "unknown ui keys: {}".format(ui_keys - UI_KEYS)
+ui_files = [l.strip()[2:] for l in ui if l.strip().startswith("- ")]
+exec_files = [l.strip()[2:] for l in block("exec") if l.strip().startswith("- ")]
+assert exec_files == ["comic-reader.js"], exec_files
+for rel in exec_files + ui_files:
+    assert os.path.isfile(os.path.join(PLUGIN, rel)), "manifest lists a missing file: {}".format(rel)
+# common.js defines the namespace the others extend; main.js wires them up.
+js = [p for p in ui_files if p.endswith(".js")]
+assert js[0] == "ui/common.js" and js[-1] == "ui/main.js", js
+
+# Keys one level into tasks / hooks / settings (pkg/plugin/config.go). Stash
+# rejects the whole plugin on an unknown one, a typo included.
+TASK_KEYS = {"name", "description", "defaultArgs", "execArgs"}
+HOOK_KEYS = TASK_KEYS | {"triggeredBy"}
+SETTING_KEYS = {"displayName", "description", "type"}
+for section, allowed, indent in [("tasks", TASK_KEYS, r"^  (?:- )?(\w+):"), ("hooks", HOOK_KEYS, r"^  (?:- )?(\w+):"),
+                                 ("settings", SETTING_KEYS, r"^    (\w+):")]:
+    keys = {m.group(1) for m in (re.match(indent, l) for l in block(section)) if m}
+    assert keys and keys <= allowed, "{}: unknown keys {}".format(section, keys - allowed)
+
+# Every list item under triggeredBy must be a trigger Stash knows -- matched
+# loosely first, so a mis-cased "gallery.update.post" is flagged, not skipped.
+triggers = [l.strip()[2:] for l in block("hooks")
+            if re.match(r"^\s+- \w+\.\w+\.\w+\s*$", l)]
+assert triggers, "no hook triggers found"
+bad = [t for t in triggers if t not in TRIGGERS]
+assert not bad, "hook triggers Stash doesn't know (they would never fire): {}".format(bad)
+for needed in ("Gallery.Create.Post", "Image.Create.Post", "Gallery.Update.Post", "Gallery.Destroy.Post",
+               "Image.Update.Post"):
+    assert needed in triggers, needed
+
+types = re.findall(r"^\s+type: (\w+)$", "\n".join(block("settings")), re.M)
+assert types and set(types) <= {"STRING", "NUMBER", "BOOLEAN"}, types
+
+# Every task passes task: "true" -- the backend only calls log.Progress then,
+# because log.Progress blocks forever outside a queued task.
+tasks = "\n".join(block("tasks"))
+assert tasks.count("- name:") == tasks.count('task: "true"'), "every task must pass task: \"true\""
+
+# The backend must stay ES5: goja versions differ in how much ES6 they take.
+with open(os.path.join(PLUGIN, "comic-reader.js"), encoding="utf-8") as f:
+    backend = f.read()
+code = re.sub(r"//[^\n]*", "", backend)
+for pattern, what in [(r"\b(let|const)\s", "let/const"), (r"=>", "arrow function"), (r"`", "template string"),
+                      (r"\bclass\s", "class")]:
+    assert not re.search(pattern, code), "backend uses {} (keep it ES5 for goja)".format(what)
+
+# No .yml may live under the plugin besides the manifest: build_site.sh
+# publishes every *.yml under plugins/ as a plugin.
+ymls = [os.path.join(d, n) for d, _, ns in os.walk(PLUGIN) for n in ns if n.endswith(".yml")]
+assert ymls == [MANIFEST], ymls
+
+# --- JavaScript logic ------------------------------------------------------
+
+node = shutil.which("node")
+if node is None:
+    print("node unavailable, skipping the JavaScript logic checks")
+    print("ALL OK")
+    raise SystemExit(0)
+
+HARNESS = r"""
+const fs = require("fs"), vm = require("vm"), path = require("path"), assert = require("assert");
+const dir = process.argv[2];
+const read = (p) => fs.readFileSync(path.join(dir, p), "utf8");
+// Values built inside a vm context carry that context's Array/Object
+// prototypes, which deepStrictEqual rejects; compare plain copies.
+const plain = (x) => (x === undefined ? x : JSON.parse(JSON.stringify(x)));
+const eq = (a, b, msg) => assert.deepStrictEqual(plain(a), plain(b), msg);
+
+// ---- backend, with Stash's globals stubbed --------------------------------
+const calls = [];
+let responder = () => ({});
+const be = {
+  input: { Args: { mode: "noop" } },
+  log: { Info() {}, Warn() {}, Error() {}, Debug() {}, Trace() {}, Progress() {} },
+  gql: { Do(q, v) { calls.push(q); return responder(q, v || {}); } },
+};
+vm.createContext(be);
+vm.runInContext(read("comic-reader.js"), be);
+const family = [{ id: "1", name: "Comic" }, { id: "2", name: "Webtoon" }, { id: "3", name: "Comic Page" }];
+const exIds = (f) => f.object_filter.tags.value.excluded.map((e) => e.id);
+
+// no default filter yet: one is created, excluding the whole family
+let f = be.hideInFilter(null, "GALLERIES", family);
+eq(exIds(f), ["1", "2", "3"]);
+assert.strictEqual(f.object_filter.tags.modifier, "INCLUDES");
+assert.strictEqual(f.object_filter.tags.value.depth, -1);
+assert.strictEqual(f.mode, "GALLERIES");
+// already hidden: no change, so no write
+assert.strictEqual(be.hideInFilter(JSON.parse(JSON.stringify(f)), "GALLERIES", family), null);
+
+// the user's own filter is kept: sort, other criteria, included tags and their depth
+const user = { mode: "GALLERIES", find_filter: { sort: "date", direction: "DESC" },
+  object_filter: { organized: { modifier: "EQUALS", value: "true" },
+    tags: { modifier: "INCLUDES", value: { items: [{ id: "9", label: "Fav" }], excluded: [{ id: "8", label: "Meh" }], depth: 0 } } } };
+f = be.hideInFilter(JSON.parse(JSON.stringify(user)), "GALLERIES", family);
+eq(exIds(f), ["8", "1", "2", "3"]);
+assert.strictEqual(f.object_filter.tags.value.depth, 0, "a user's depth-0 include must keep its meaning");
+eq(f.object_filter.organized, user.object_filter.organized);
+eq(f.find_filter, user.find_filter);
+// a user's exclude-only criterion keeps its depth: depth applies to the
+// exclusions too, so forcing -1 would widen "exclude X" to X's children
+const exOnly = { object_filter: { tags: { modifier: "INCLUDES", value: { items: [], excluded: [{ id: "8", label: "Meh" }], depth: 0 } } } };
+const fx = be.hideInFilter(JSON.parse(JSON.stringify(exOnly)), "GALLERIES", family);
+assert.strictEqual(fx.object_filter.tags.value.depth, 0);
+eq(exIds(fx), ["8", "1", "2", "3"]);
+// "has any tag" can't carry exclusions in the UI: leave it alone
+assert.strictEqual(be.hideInFilter({ object_filter: { tags: { modifier: "NOT_NULL" } } }, "GALLERIES", family), null);
+
+// show removes only the family, and drops a criterion left empty
+let s = be.showInFilter(JSON.parse(JSON.stringify(f)), family);
+eq(exIds(s), ["8"]);
+eq(s.object_filter.tags.value.items, [{ id: "9", label: "Fav" }]);
+s = be.showInFilter(be.hideInFilter(null, "IMAGES", family), family);
+assert.strictEqual(s.object_filter.tags, undefined);
+assert.strictEqual(be.showInFilter(JSON.parse(JSON.stringify(user)), family), null);
+
+assert.ok(be.isCbz([{ path: "/a/Issue 1.CBZ" }]));
+assert.ok(be.isCbz([{ path: "/a/x.zip" }, { path: "/a/y.cbz" }]));
+assert.ok(!be.isCbz([{ path: "/a/x.zip" }]));
+assert.ok(!be.isCbz([{ path: "/a/x.cbz.txt" }]));
+assert.ok(!be.isCbz(null));
+
+// canned GraphQL for the hook / removal paths
+const cfg = { comicTagId: "1", webtoonTagId: "2", comicPageTagId: "3" };
+function respond(extra) {
+  return (q, v) => {
+    if (q.indexOf("configuration") >= 0) return { configuration: { plugins: { "comic-reader": cfg } } };
+    if (q.indexOf("findTags") >= 0) return { findTags: { tags: [{ id: "2", name: "Webtoon" }, { id: "3", name: "Comic Page" }] } };
+    return extra(q, v);
+  };
+}
+const tags = { comicTagId: "1", webtoonTagId: "2", comicPageTagId: "3" };
+
+// THE quirk: the NOT candidate query hands back image 20, which is in a
+// non-comic gallery AND a comic one. It must not be untagged; 21 (in no
+// comic) and 22 (in no gallery at all) must be.
+responder = respond((q, v) => {
+  if (q.indexOf("findImages") >= 0) {
+    if (v.f.NOT) return { findImages: { images: [
+      { id: "20", galleries: [{ tags: [] }, { tags: [{ id: "1" }] }] },
+      { id: "21", galleries: [{ tags: [{ id: "7" }] }] } ] } };
+    if (v.f.galleries && v.f.galleries.modifier === "IS_NULL") return { findImages: { images: [{ id: "22", galleries: [] }] } };
+  }
+  throw new Error("unexpected query " + q);
+});
+eq(be.removablePages(tags, null), ["21", "22"]);
+// a Webtoon-tagged gallery (a child of Comic) also holds its pages
+responder = respond((q, v) => ({ findImages: { images: [{ id: "30", galleries: [{ tags: [{ id: "2" }] }] }] } }));
+eq(be.removablePages(tags, "5"), []);
+
+// a sync rewriting a non-comic gallery without touching tags costs no image query
+calls.length = 0;
+responder = respond((q) => {
+  if (q.indexOf("findGallery") >= 0) return { findGallery: { id: "4", files: [], tags: [{ id: "7" }] } };
+  throw new Error("unexpected query " + q);
+});
+assert.strictEqual(be.onHook({ type: "Gallery.Update.Post", id: 4, inputFields: ["title", "date"] }), "skipped");
+assert.ok(!calls.some((q) => q.indexOf("findImages") >= 0));
+
+// an image edit that didn't move it between galleries costs nothing -- not
+// even the config read -- because every image the sync plugin rewrites fires it
+calls.length = 0;
+responder = () => { throw new Error("no query expected"); };
+assert.strictEqual(be.onHook({ type: "Image.Update.Post", id: 1, inputFields: ["tag_ids", "ids"] }), "skipped");
+assert.strictEqual(be.onHook({ type: "Image.Update.Post", id: 1 }), "skipped");
+assert.strictEqual(calls.length, 0);
+
+// .cbz opt-out: unmarking a .cbz by editing its tags records "not_comic";
+// a scan-time update (no field list) never does; Set Up skips opted-out ones
+const writes = [];
+function cbzGallery(tagList, cf) {
+  return respond((q, v) => {
+    if (q.indexOf("findGallery(") >= 0) return { findGallery: { id: "9", files: [{ path: "/c/x.cbz" }], tags: tagList, custom_fields: cf } };
+    if (q.indexOf("mutation") >= 0) { writes.push(v.input); return {}; }
+    if (q.indexOf("findImages") >= 0) return { findImages: { images: [] } };
+    throw new Error("unexpected query " + q);
+  });
+}
+writes.length = 0;
+responder = cbzGallery([], {});
+be.onHook({ type: "Gallery.Update.Post", id: 9, inputFields: ["id", "tag_ids"] });
+eq(writes.filter((w) => w.custom_fields).map((w) => w.custom_fields), [{ partial: { not_comic: "true" } }]);
+writes.length = 0;
+be.onHook({ type: "Gallery.Update.Post", id: 9 });
+assert.strictEqual(writes.filter((w) => w.custom_fields).length, 0, "no field list: not a user's tag edit");
+writes.length = 0;
+responder = cbzGallery([{ id: "1" }], { not_comic: "true" });
+be.onHook({ type: "Gallery.Update.Post", id: 9, inputFields: ["tag_ids"] });
+eq(writes.filter((w) => w.custom_fields).map((w) => w.custom_fields), [{ remove: ["not_comic"] }]);
+// a newly scanned .cbz the user already said no to stays unmarked
+writes.length = 0;
+responder = cbzGallery([], { not_comic: "true" });
+be.onHook({ type: "Gallery.Create.Post", id: 9 });
+assert.ok(!writes.some((w) => w.tag_ids), "opted-out .cbz must not be re-marked on scan");
+writes.length = 0;
+responder = respond((q, v) => {
+  if (q.indexOf("findGalleries") >= 0) return { findGalleries: { galleries: [
+    { id: "1", files: [{ path: "/a.cbz" }], tags: [], custom_fields: {} },
+    { id: "2", files: [{ path: "/b.cbz" }], tags: [], custom_fields: { not_comic: "true" } },
+    { id: "3", files: [{ path: "/c.cbz" }], tags: [{ id: "2" }], custom_fields: {} } ] } };
+  if (q.indexOf("mutation") >= 0) { writes.push(v.input); return {}; }
+  throw new Error("unexpected query " + q);
+});
+assert.strictEqual(be.tagCbzGalleries(tags, { "1": true, "2": true, "3": true }), 1);
+eq(writes[0].ids, ["1"]);
+
+// hooks stay inert until the plugin has been set up
+responder = (q) => ({ configuration: { plugins: {} } });
+assert.strictEqual(be.onHook({ type: "Image.Create.Post", id: 1 }), "not set up");
+
+// a scanned page already carrying the tag needs no write
+calls.length = 0;
+responder = respond((q) => ({ findImage: { id: "5", tags: [{ id: "3" }], galleries: [{ tags: [{ id: "1" }] }] } }));
+assert.strictEqual(be.onHook({ type: "Image.Create.Post", id: 5 }), "already tagged");
+assert.ok(!calls.some((q) => q.indexOf("mutation") >= 0));
+
+// ---- UI, with a bare window ------------------------------------------------
+const win = { PluginApi: { React: { createElement() {}, useState() {} }, libraries: {}, components: {} } };
+win.window = win;
+win.Intl = Intl;
+vm.createContext(win);
+for (const p of ["ui/common.js", "ui/reader.js", "ui/builder.js"]) vm.runInContext(read(p), win);
+const CR = win.ComicReader;
+
+const P = (w, h) => ({ width: w, height: h });
+const portrait = Array.from({ length: 13 }, () => P(800, 1200));
+let sp = CR.buildSpreads(portrait, true);
+eq(sp.slice(0, 3), [[0], [1, 2], [3, 4]]);
+eq(sp[sp.length - 1], [11, 12]);
+assert.strictEqual(CR.buildSpreads(portrait, false).length, 13);
+// a double-page image stands alone and pairing resumes after it
+sp = CR.buildSpreads([P(8, 12), P(8, 12), P(24, 12), P(8, 12), P(8, 12)], true);
+eq(sp, [[0], [1], [2], [3, 4]]);
+eq(CR.buildSpreads([], true), []);
+
+const img = (id, date, path) => ({ id, date, visual_files: [{ path }] });
+const order = CR.sortPages([img("a", null, "/c.cbz/page10.png"), img("b", null, "/c.cbz/page2.png"), img("c", null, "/c.cbz/page1.png")]);
+eq(order.map((i) => i.id), ["c", "b", "a"], "natural order: page2 before page10");
+const posts = CR.sortPages([img("p3", "2026-01-03", "/x/1"), img("p1", "2026-01-01", "/x/9"), img("p2", "2026-01-02", "/x/5")]);
+eq(posts.map((i) => i.id), ["p1", "p2", "p3"], "post date decides before path");
+
+const strip = { width: 720, height: 3200 };
+assert.ok(CR.looksLikeWebtoon([strip, strip, strip], 2));
+assert.ok(CR.looksLikeWebtoon([P(800, 1200), strip, strip], 2), "a normal cover doesn't outvote the strips");
+assert.ok(!CR.looksLikeWebtoon(portrait, 2));
+assert.ok(!CR.looksLikeWebtoon([P(0, 0)], 2));
+
+assert.strictEqual(CR.suggestTitle([{ title: "Moon Quest Chapter 1 Page 1" }, { title: "Moon Quest Chapter 1 Page 12" }]), "Moon Quest Chapter 1");
+assert.strictEqual(CR.suggestTitle([{ title: "Ep. 4 - pg 1" }, { title: "Ep. 4 - pg 2" }]), "Ep. 4");
+assert.strictEqual(CR.suggestTitle([{ title: "Sketch dump" }]), "Sketch dump");
+assert.strictEqual(CR.suggestTitle([{ title: "" }]), "");
+
+assert.strictEqual(CR.galleryTitle({ id: 1, title: "", files: [{ path: "/lib/Space Pals - Issue 1.cbz" }] }), "Space Pals - Issue 1");
+assert.strictEqual(CR.galleryTitle({ id: 2, title: "Named" }), "Named");
+assert.strictEqual(CR.galleryTitle({ id: 3, title: "", files: [], folder: { path: "/lib/Folder Comic" } }), "Folder Comic");
+
+console.log("JS OK");
+"""
+
+proc = subprocess.run([node, "-", PLUGIN], input=HARNESS, capture_output=True, text=True)
+assert proc.returncode == 0 and proc.stdout.strip().endswith("JS OK"), proc.stdout + proc.stderr
+
+print("ALL OK")

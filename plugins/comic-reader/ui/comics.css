@@ -1,0 +1,319 @@
+/* Comic Reader.
+ *
+ * Layout and sizing only, wherever possible. Colours, card surfaces, buttons,
+ * badges and inputs come from Stash's own classes (card, grid-card,
+ * gallery-card, btn-*, badge-*, text-muted, Lightbox), so a Stash theme or
+ * Custom CSS restyles this plugin along with everything else. Where a colour
+ * is unavoidable it is the theme's --primary. Everything here is prefixed cr-.
+ */
+
+/* ---------------------------------------------------------------- library */
+
+.cr-library {
+  padding-top: 0.5rem;
+}
+.cr-group {
+  margin-bottom: 1rem;
+}
+.cr-group-title {
+  margin: 0.75rem 15px 0.5rem;
+}
+.cr-group-title a {
+  color: inherit;
+}
+.cr-empty,
+.cr-loading {
+  padding: 2rem 1rem;
+  text-align: center;
+}
+
+/* Comic covers are portrait: keep the card's image box 2:3 at every zoom
+   level instead of Stash's fixed landscape-gallery heights. */
+.gallery-card.cr-comic-card .gallery-card-image {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 2 / 3;
+  object-fit: cover;
+  object-position: top;
+}
+.cr-comic-card .thumbnail-section {
+  position: relative;
+}
+.cr-format-badge {
+  position: absolute;
+  top: 0.7rem;
+  left: 0.7rem;
+  z-index: 2;
+}
+
+/* ------------------------------------------------------ performer/studio tab */
+
+.cr-tab-pane {
+  padding-top: 1rem;
+}
+/* While the Comics tab is showing, Stash still marks its own active tab;
+   draw that one like an inactive tab so only Comics looks selected. */
+.cr-comics-active .nav-link.active:not(.cr-tab) {
+  color: inherit;
+  background-color: transparent;
+  border-color: transparent;
+}
+.cr-comics-active .nav-link.active:not(.cr-tab)::after {
+  display: none;
+}
+.cr-tab {
+  cursor: pointer;
+}
+
+/* ------------------------------------------------------------ gallery page */
+
+.cr-gallery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.5rem 0 0.75rem;
+}
+
+/* ----------------------------------------------------------------- builder */
+
+.cr-builder-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+.cr-builder {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 1rem;
+  align-items: start;
+}
+.cr-check {
+  align-items: center;
+}
+/* Picked pages: the card's own checkbox shows it, the outline makes it
+   visible at a glance -- in the theme's primary colour. */
+.cr-pick.cr-picked {
+  box-shadow: 0 0 0 2px var(--primary);
+}
+.cr-pick .image-card-preview {
+  height: 180px;
+}
+.cr-builder-panel {
+  position: sticky;
+  top: 4.5rem;
+}
+.cr-order-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 1rem;
+  font-size: 0.8rem;
+}
+.cr-order {
+  max-height: 45vh;
+  overflow-y: auto;
+  margin: 0;
+  padding-left: 1.4rem;
+  font-size: 0.85rem;
+}
+.cr-order li {
+  margin-bottom: 0.3rem;
+}
+.cr-order li img {
+  width: 28px;
+  height: 36px;
+  object-fit: cover;
+  border-radius: 2px;
+  margin-right: 0.4rem;
+  vertical-align: middle;
+}
+.cr-order li .btn {
+  padding: 0 0.3rem;
+}
+
+@media (max-width: 900px) {
+  .cr-builder {
+    grid-template-columns: 1fr;
+  }
+  .cr-builder-panel {
+    position: static;
+  }
+}
+
+/* ------------------------------------------------------------------ reader */
+
+/* The root also carries Stash's .Lightbox class, which supplies the
+   backdrop (and whatever a theme does to it) -- the reader should feel like
+   Stash's own image viewer. */
+.cr-reader {
+  position: fixed;
+  inset: 0;
+  z-index: 1040;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.cr-stage {
+  position: absolute;
+  inset: 0;
+  outline: none;
+}
+.cr-pages {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: pan-y pinch-zoom;
+}
+.cr-spread {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+.cr-page {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.cr-spread-double .cr-page {
+  max-width: 50%;
+}
+.cr-page-left {
+  object-position: right center;
+}
+.cr-page-right {
+  object-position: left center;
+}
+.cr-scroll {
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+.cr-strip {
+  margin: 0 auto;
+  width: 100%;
+}
+.cr-strip-page {
+  display: block;
+  width: 100%;
+  height: auto;
+  /* no gaps: webtoon strips are drawn to run into each other */
+  margin: 0;
+}
+.cr-end-card {
+  max-width: 420px;
+  margin: 0 auto;
+  padding: 2rem 1rem;
+  text-align: center;
+}
+.cr-scroll-end {
+  padding: 3rem 1rem 6rem;
+}
+.cr-end-actions {
+  display: flex;
+  justify-content: center;
+  gap: 0.5rem;
+}
+/* Toolbars float over the page like the lightbox's header; the dark scrim is
+   only there to keep the controls legible over bright artwork. */
+.cr-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.75rem;
+  background: linear-gradient(rgba(0, 0, 0, 0.75), rgba(0, 0, 0, 0.45));
+  transition: opacity 0.25s ease, transform 0.25s ease;
+  z-index: 2;
+}
+.cr-bar-top {
+  top: 0;
+}
+.cr-bar-bottom {
+  bottom: 0;
+  background: linear-gradient(rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0.75));
+}
+.cr-bar.cr-hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+.cr-bar-top.cr-hidden {
+  transform: translateY(-100%);
+}
+.cr-bar-bottom.cr-hidden {
+  transform: translateY(100%);
+}
+.cr-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.cr-title-main {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cr-title-sub {
+  font-size: 0.8rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cr-bar-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.4rem;
+}
+.cr-counter {
+  font-variant-numeric: tabular-nums;
+  min-width: 4.5em;
+  text-align: right;
+}
+.cr-slider {
+  width: 100%;
+  accent-color: var(--primary);
+}
+.cr-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  z-index: 2;
+  pointer-events: none;
+}
+.cr-progress > div {
+  height: 100%;
+  background-color: var(--primary);
+}
+.cr-reader .cr-loading,
+.cr-reader .cr-error {
+  position: absolute;
+  top: 40%;
+  left: 0;
+  right: 0;
+}
+
+/* Phones: controls wrap under the title, and the strip is full width. */
+@media (max-width: 700px) {
+  .cr-bar-top {
+    flex-wrap: wrap;
+  }
+  .cr-bar-top .cr-title {
+    order: -1;
+    flex-basis: calc(100% - 90px);
+  }
+  .cr-bar-group {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .cr-strip {
+    max-width: 100% !important;
+  }
+}

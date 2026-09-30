@@ -17,7 +17,7 @@ Published source URL (add this in Stash → Settings → Plugins → Add Source)
 https://cgnz2002.github.io/stash-plugins/main/index.yml
 ```
 
-Currently there are two plugins (the Patreon one is being retired — see
+Currently there are three plugins (the Patreon one is being retired — see
 *Patreon* below):
 
 - **`plugins/of-stash-sync/`** — **Fan Site Metadata Sync**. Syncs scraped
@@ -33,6 +33,13 @@ Currently there are two plugins (the Patreon one is being retired — see
   deliberate: Stash keys plugin settings by plugin id, so keeping it preserves
   every existing install's configuration.** The per-site differences live in
   `sources.py`; see *Multi-site architecture* below.
+- **`plugins/comic-reader/`** — **Comic Reader**. A Comics section, a reader
+  (side-by-side page spreads, or a continuous webtoon scroll) and a Comics tab
+  on performer and studio pages. A comic is a gallery tagged `Comic` or any
+  tag under it; `.cbz` galleries are marked automatically, comics and their
+  pages are hidden from the Galleries/Images pages. Unlike the others its
+  backend is **embedded JavaScript** (`interface: js`), not Python — see
+  *Comic Reader* below for why, and for the Stash quirks it works around.
 - **`plugins/patreon-stash-sync/`** — **DEPRECATED and frozen.** Its manifest
   `name` and every task description say so, so Stash shows it in the plugin
   list and Tasks page; it stays published rather than being dropped from the
@@ -83,6 +90,16 @@ plugins/
     media.py, log.py                 Copied from of-stash-sync
     README.md                        User-facing docs + pipeline diagram
     patreon.png                      Studio icon
+  comic-reader/
+    comic-reader.yml                 Manifest: hooks, tasks, settings, ui files (order matters)
+    comic-reader.js                  Backend (Stash's embedded JS, ES5): tags, hooks, tasks
+    ui/common.js                     Shared UI helpers; defines window.ComicReader (load first)
+    ui/reader.js, ui/library.js      The reader; the Comics page + the shared cover grid
+    ui/builder.js                    "New comic from images"
+    ui/inject.js                     Comics tab on performer/studio pages, gallery-page buttons
+    ui/main.js                       Route + nav item + injector wiring (load last)
+    ui/comics.css                    All styles, prefixed cr-
+    README.md                        User-facing docs
 ```
 
 ### Multi-site architecture
@@ -163,9 +180,12 @@ manifest). At runtime:
 - Progress and messages are written to **stderr** with the SOH/level/STX prefix
   scheme (`log.py`) so they appear in the Stash log viewer and task bar.
 - The final result is printed to **stdout** as JSON: `{"output": "ok"}` on
-  success, or `{"error": "..."}` on a fatal failure (Stash logs the `error` at
-  error level and marks the task failed). `main()` returns the error string;
-  keep that contract when adding new fatal-exit paths.
+  success, or `{"error": "..."}` on a fatal failure. Stash logs the `error` at
+  error level — but the **job still ends as FINISHED, not FAILED** (verified
+  against v0.31.1: the task function logs the error and returns nil). So the
+  log is the only place a user sees it; make the message actionable.
+  `main()` returns the error string; keep that contract when adding new
+  fatal-exit paths.
 
 The manifest's tasks (15 of them, over 17 settings) are selected by `args.mode`,
 crossed with the optional `args.site` scope and `args.dryRun` — which is why
@@ -461,10 +481,98 @@ asks the profile what to open.
   than duplicating. `collections()` joins `hashtags`/`tier`/`is_pinned` as a
   capability that degrades to empty on the scraper-backed sources.
 
+### Comic Reader
+
+`plugins/comic-reader/` shares nothing with the sync plugins; its user docs are
+its README. What matters when changing it:
+
+- **Why `interface: js`.** Its work is hooks, and Stash runs hooks
+  synchronously inside the triggering request — including during a scan, where
+  `Image.Create.Post` fires once per new image. A `raw` hook would spawn Python
+  per image; an embedded JS hook runs in-process, and `gql.Do()` calls Stash's
+  GraphQL handler directly (no network, session cookie attached). The backend
+  is **ES5** (`var`, `function`): goja's ES6 support varies by Stash version,
+  and `tests/test_comic_reader.py` rejects `let`/`const`/arrows/template
+  strings/classes in it.
+- **`log.Progress` blocks forever outside a queued task** (it sends on a
+  channel nothing reads for hooks and `runPluginOperation`). Only call it via
+  `progress(args, …)`, which requires the `task: "true"` every task passes in
+  its `defaultArgs`. The UI calls the backend through `runPluginOperation`
+  (modes `tags`, `pages`), which never passes it.
+- **The model is tags**, ids stored in the plugin's own settings
+  (`comicTagId`, `webtoonTagId`, `comicPageTagId`; `ensureTags()` creates or
+  reuses by name/alias and saves them). `Webtoon` and `Comic Page` are
+  children of `Comic`, so "is a comic" = tagged Comic at `depth: -1`, and one
+  hierarchical exclusion hides everything. `Comic Page` exists because the
+  Images page's filter can't see an image's galleries.
+- **Hooks must stay cheap** — `Gallery.Update.Post` fires for every gallery
+  the sync plugin rewrites, `Image.Update.Post` for every image anything
+  rewrites (this plugin's own Comic Page writes included). `Image.Update.Post`
+  returns before any query unless `inputFields` has `gallery_ids`;
+  `configuredTags()` makes every hook a no-op until set-up has run; a non-comic
+  gallery update without `tag_ids` returns before any image query.
+- **`addGalleryImages` / `removeGalleryImages` fire no hooks** (Stash's own
+  gallery Add tab and "Remove from gallery" use them), so opening a comic in
+  the reader or its gallery page runs the per-gallery `pages` operation, and
+  *Set Up Comics* repairs everything.
+- **User choices must survive a repair.** A `.cbz` that loses its comic tags
+  through an edit that lists `tag_ids` gets a `not_comic` custom field (the
+  scan hook and `tagCbzGalleries` skip it; re-marking clears it) -- only on an
+  explicit tag edit, never a scan-time update with no field list. Hide/Show
+  write the `showComicsInLists` setting, which *Set Up* follows.
+- **Never trust `NOT` over a `galleries_filter`.** Stash evaluates it per
+  joined gallery row, not per image, so an image in one comic and one
+  non-comic gallery matches both `galleries_filter: comic` and
+  `NOT: {galleries_filter: comic}`. Trusting it stripped `Comic Page` off real
+  comic pages. `removablePages()` uses it only as a candidate list (plus
+  `galleries: IS_NULL` for pages in no gallery) and checks each candidate's
+  galleries in code. The test pins this.
+- **Hiding = default filters, per view.** Stash keys default filters by view
+  (`configuration.ui.defaultFilters.<view>`), and performer/studio tabs are
+  their own views (`performer_galleries`, `studio_images`, …), so hiding sets
+  six of them. Tag views are left alone on purpose (the Comic tag's own page
+  would be empty). The saved shape is what the UI writes:
+  `tags: {modifier: INCLUDES, value: {items, excluded: [{id,label}], depth}}` —
+  there is no EXCLUDES modifier for tags. `hideInFilter`/`showInFilter` merge
+  into a user's existing default filter and must keep everything else --
+  including `depth`, which applies to exclusions too: only a criterion the
+  plugin creates gets `depth: -1`; the family is listed id by id instead.
+- **Reading order** is post date, then natural file-name order
+  (`CR.sortPages`): a `.cbz` has no dates, and a comic assembled from
+  one-page-per-post images must read in release order whatever order they
+  were added. Stash's own gallery view sorts by path only.
+- **UI injection.** Performer/studio tabs and the gallery page are not
+  patchable components in v0.31, so `ui/inject.js` finds the rendered
+  elements and uses `ReactDOM.createPortal` (keeping Stash's router/context).
+  The injector lives in the `MainNavBar.MenuItems` patch — **not**
+  `MainNavBar.UtilityItems`, which Stash renders twice (desktop + mobile) and
+  duplicated every injected tab. Stash redirects unknown tab URLs
+  (`/performers/1/comics` → `.../galleries`), so the Comics tab switches
+  in-page. `register.route` is react-router v5 (`<Route path component>`,
+  prefix match), so one route dispatches `/plugins/comics`, `/read/:id` and
+  `/new`.
+- **Interplay with of-stash-sync:** its Full Sync keeps every tag under
+  comic-reader's `comicTagId` (see `ProtectedTags` above), so the settings
+  key names `comicTagId` / `webtoonTagId` / `comicPageTagId` are a contract
+  between the two plugins -- don't rename them.
+- **Look and theming: build from Stash's own parts.** Cards are
+  `PluginApi.components.GridCard` with the `gallery-card` class names, sized
+  like Stash's (`CR.cardWidth` is its `(w-30)/ceil((w-30)/preferred)-10`); the
+  toolbar reuses `.filtered-list-toolbar` markup and the `zoom-slider`;
+  inputs use `clearable-text-field form-control` / `btn-secondary form-control`;
+  messages go through `PluginApi.hooks.useToast`; the spinner is
+  `LoadingIndicator`; the reader's root carries `.Lightbox`. comics.css is
+  layout only -- any colour it needs is `var(--primary)`. GridCard lives in a
+  lazily loaded chunk, so `CR.useCardComponents()` loads
+  `loadableComponents.TagLink` before a grid renders; a plugin route doesn't
+  load it on its own.
+
 ## Hard constraints — keep these intact
 
 - **Standard library only.** No third-party Python deps; the plugin runs inside
-  the Stash container with nothing installed. (This is why `media.py` has its own
+  the Stash container with nothing installed. The same goes for comic-reader's
+  JavaScript: no bundler, no npm packages — UI code uses only what
+  `window.PluginApi` provides. (This is why `media.py` has its own
   emoji regex instead of the `emojis` package.) Don't add `requirements.txt` or
   imports outside the stdlib.
 - **Databases are opened read-only.** Never change `SourceDatabase` to open for
@@ -528,7 +636,9 @@ Note `build_site.sh` globs `plugins/**/*.yml`, so **every** `.yml` under
   formatting (as in existing code), docstrings explaining *why* (schema versions,
   edge cases) rather than restating the code.
 - No linter is configured. There **are** tests: `python3 tests/run.py` (add a
-  substring to filter, e.g. `python3 tests/run.py patreon`). Stdlib only, one
+  substring to filter, e.g. `python3 tests/run.py patreon`).
+  `test_comic_reader.py` runs the plugin's JavaScript under Node when `node`
+  is on PATH and skips that half otherwise. Stdlib only, one
   process per file, each asserting its way to `ALL OK`; nothing talks to a
   running Stash. They live at the repo root rather than beside the plugin
   because `build_site.sh` runs `zip -r` over a plugin's whole directory, so
