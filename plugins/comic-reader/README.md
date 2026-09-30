@@ -43,7 +43,10 @@ The same task is in the Comics page's **…** menu as **Set up / repair comics**
 
 ## Using it
 
-**Comics section.** Choose **Comics** in the navigation bar. Comics are
+**Comics section.** Choose **Comics** in the navigation bar. Like Stash's own
+items, it can be shown or hidden under **Settings → Interface → Menu items**.
+It is switched on once when the plugin is installed; after that your choice
+stands. Comics are
 grouped by creator. You can search, filter to comics or webtoons, sort, and
 switch grouping off. A blue bar under a cover shows how far you have read in
 this browser.
@@ -128,6 +131,12 @@ rest of each filter is left as you set it.
 | Webtoon Page Ratio | How tall a page must be, as a multiple of its width, before an untagged comic auto-opens as a scroll. Default 2. |
 
 ## Notes
+
+- **Other plugins.** Comic Reader shares the navigation bar and the performer,
+  studio and gallery pages with other plugins, and is tested alongside Stash
+  TV, Binge, role-tagger, refract and others. If any part of it ever fails, it
+  hides just that part; the rest of Stash keeps working. (0.1.0 could blank
+  Stash when Stash TV was installed; fixed in 0.1.1.)
 
 - **PDFs.** Stash can't read PDFs. Convert them to `.cbz` and put them in a
   library folder; Stash picks them up on the next scan and they arrive as

@@ -541,6 +541,33 @@ its README. What matters when changing it:
   (`CR.sortPages`): a `.cbz` has no dates, and a comic assembled from
   one-page-per-post images must read in release order whatever order they
   were added. Stash's own gallery view sorts by path only.
+- **Share patched components politely -- 0.1.0 blanked Stash for Stash TV
+  users.** Stash's patch chain (`RB` in the bundle) *replaces* the argument
+  list with whatever a `before` returns, then calls each `instead` with those
+  arguments plus `next`. React calls a component with two arguments, and
+  Stash TV's `MainNavBar.MenuItems` patch takes `next` positionally as the
+  third -- so a `before` returning just `[props]` handed it `undefined`
+  (React #130, blank app). Every patch here goes through `CR.keepArgs`, which
+  returns all arguments and leaves them untouched if the transform throws;
+  children stay an array (`React.Children.toArray`); and everything rendered
+  inside Stash's tree sits in `CR.Boundary`, an error boundary, so a failure
+  hides only our piece. `tests/test_comic_reader.py` runs the chain against a
+  Stash TV-shaped patch.
+- **The nav item follows the Stash TV / Binge pattern:** a `before` on
+  `CheckboxGroup` (group `menu-items`) adds a "Comics" row to Settings >
+  Interface > Menu items, the item renders only when `interface.menuItems`
+  holds `comics` (or has no list at all), and `seedMenuItem()` adds it to the
+  list once, recording `navSeeded` in the plugin's settings so a user who
+  unticks it stays unticked.
+- **Claim singletons in an effect, never during render.** React can render a
+  component and discard that render while lazy chunks load (a browser's
+  first load); the injector used to claim "I am the one" during render, the
+  discarded render kept the claim, and the gallery buttons / Comics tab never
+  appeared. The claim now happens in `useEffect`, which only committed
+  instances run.
+- **Don't restyle another component's state, change it.** The stock tab that
+  was active when Comics opens has its `active` class removed and restored
+  afterwards; a CSS override lost to themes (refract) and left two tabs lit.
 - **UI injection.** Performer/studio tabs and the gallery page are not
   patchable components in v0.31, so `ui/inject.js` finds the rendered
   elements and uses `ReactDOM.createPortal` (keeping Stash's router/context).

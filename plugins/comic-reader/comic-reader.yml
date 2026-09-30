@@ -1,6 +1,6 @@
 name: Comic Reader
 description: A comics section, reader and performer/studio Comics tabs for Stash. Galleries tagged Comic (or Webtoon) are read as side-by-side page spreads or a continuous webtoon scroll, and hidden from the Galleries and Images pages. .cbz files are marked as comics automatically.
-version: 0.1.0
+version: 0.1.1
 url: https://github.com/cgnz2002/stash-plugins
 
 settings:
