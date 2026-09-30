@@ -94,6 +94,7 @@ plugins/
     comic-reader.yml                 Manifest: hooks, tasks, settings, ui files (order matters)
     comic-reader.js                  Backend (Stash's embedded JS, ES5): tags, hooks, tasks
     ui/common.js                     Shared UI helpers; defines window.ComicReader (load first)
+    ui/info.js                       The reader's details panel (docked, or a sheet on phones)
     ui/reader.js, ui/library.js      The reader; the Comics list (Stash's own) + comic cards
     ui/builder.js                    "New comic from images"
     ui/inject.js                     Comics tab on performer/studio pages, gallery-page buttons
@@ -599,6 +600,20 @@ its README. What matters when changing it:
   arguments it got. `useContext` runs on every render so the hook order never
   changes, and the error fallback renders Stash's grid lazily as a component --
   calling `next` up front would run its hooks inside ours. The test pins both.
+- **The reader's details panel (`ui/info.js`)** is the gallery page's
+  details panel reshaped for comics: links lead to more comics (a performer
+  or studio opens its Comics tab via `CR.returnToTab`, a tag opens
+  `/plugins/comics?c=<criterion>`), and editing stays on the gallery page.
+  `CR.criterionParam` must encode exactly as Stash's `getEncodedParams` does
+  (braces outside strings become parentheses); the test decodes it with a
+  copy of Stash's own `translateJSON`. `RatingSystem` arrives with the
+  `Galleries` chunk, so the panel loads that. Two theme lessons: the panel is
+  an `aside` that owns position, with a `.card` inside for the surface only
+  (refract's `.card` sets `position: relative` and full-width images, which
+  wrecked a positioned card), and a dark scrim sits behind that card because
+  a theme's card can be translucent. `CR.returnToTab` is consumed when the
+  Comics tab has actually *shown*, not on mount: Stash redirects
+  `/performers/1` to its default tab and the tab can mount twice on the way.
 - **Look and theming: build from Stash's own parts.** Cards are
   `PluginApi.components.GridCard` with the `gallery-card` class names and
   Stash's own `GalleryCard.Overlays/Details/Popovers`, sized like Stash's

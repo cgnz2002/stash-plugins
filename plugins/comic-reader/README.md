@@ -89,6 +89,7 @@ through a series.
 | Next / previous | → / ←, Space, PageDown / PageUp, click the right / left third, swipe | scroll, Space, arrow keys |
 | First / last page | Home / End | Home / End |
 | Show / hide toolbars | click the middle, or move the mouse | tap |
+| Details panel | I, or the ⓘ button | I, or the ⓘ button |
 | Full screen | F | F |
 | Leave | Esc or Back | Esc or Back |
 
@@ -100,6 +101,13 @@ through a series.
 - **− / +** in scroll mode sets the strip width.
 - The reader remembers your page per comic in this browser, and starts over
   once you finish a comic.
+- **Details** shows the comic's studio, title, date, page count, rating,
+  description, performers, tags and links, like the panel on a gallery page.
+  Rate it right there. A performer or studio opens their **Comics** tab, a tag
+  opens the Comics page filtered to that tag, and **Open gallery in Stash** is
+  there for editing and file details. On a wide screen it sits beside the
+  pages and stays as you last left it; on a phone it is a sheet over the page
+  that starts closed (tap above it or press the X to close it).
 
 A comic with just the `Comic` tag whose pages are tall strips opens as a scroll
 anyway. If one is mis-detected, press **Pages** and that comic stays paged.

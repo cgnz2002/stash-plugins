@@ -80,7 +80,6 @@
     }, [nav]);
 
     React.useEffect(function () {
-      CR.returnToTab = null;
       var live = true;
       CR.tags().then(function (tags) {
         return CR.gql("query ($f: GalleryFilterType) { findGalleries(gallery_filter: $f, filter: {per_page: 0}) { count } }",
@@ -143,6 +142,10 @@
           prev.setAttribute("aria-selected", "true");
         }
       }
+      // The request to land on this tab is used up once it has shown -- not on
+      // mount: Stash redirects /performers/1 to its default tab and the tab
+      // can mount twice on the way, and the first mount would eat it.
+      if (on && CR.returnToTab === tabKey) CR.returnToTab = null;
       nav.classList.toggle("cr-comics-active", on);
       els.link.classList.toggle("active", on);
       els.link.setAttribute("aria-selected", on ? "true" : "false");
@@ -293,6 +296,13 @@
 
     var loc = CR.Router.useLocation ? CR.Router.useLocation() : window.location;
     var history = CR.Router.useHistory ? CR.Router.useHistory() : null;
+    // A pending "open the Comics tab" request lapses once the user goes
+    // anywhere but that page or the reader, so it can't fire on a later visit.
+    React.useEffect(function () {
+      if (!CR.returnToTab || /^\/plugins\/comics\/read\//.test(loc.pathname)) return;
+      var c = pageContext(loc.pathname);
+      if (!c || c.kind + ":" + c.id !== CR.returnToTab) CR.returnToTab = null;
+    }, [loc.pathname]);
     if (!mine[0]) return null;
     var ctx = pageContext(loc.pathname);
     if (!ctx) return null;

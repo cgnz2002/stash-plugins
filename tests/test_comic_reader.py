@@ -285,7 +285,7 @@ const win = { PluginApi: { React: { createElement() {}, useState() {}, Component
 win.window = win;
 win.Intl = Intl;
 vm.createContext(win);
-for (const p of ["ui/common.js", "ui/reader.js", "ui/builder.js"]) vm.runInContext(read(p), win);
+for (const p of ["ui/common.js", "ui/info.js", "ui/reader.js", "ui/builder.js"]) vm.runInContext(read(p), win);
 const CR = win.ComicReader;
 
 const P = (w, h) => ({ width: w, height: h });
@@ -320,6 +320,38 @@ assert.strictEqual(CR.galleryTitle({ id: 1, title: "", files: [{ path: "/lib/Spa
 assert.strictEqual(CR.galleryTitle({ id: 2, title: "Named" }), "Named");
 assert.strictEqual(CR.galleryTitle({ id: 3, title: "", files: [], folder: { path: "/lib/Folder Comic" } }), "Folder Comic");
 
+// Details panel links: "comics with this tag" must decode with Stash's own
+// list-URL decoder (translateJSON in the v0.31 bundle, copied as shipped),
+// including a label with parentheses and quotes in it.
+function stashTranslate(t, r) {
+  let n = false, a = false;
+  return [...t].map((i) => {
+    if (a) { a = false; return i; }
+    switch (i) {
+      case "\\": n && (a = true); break;
+      case '"': n = !n; break;
+      case "(": if (r && !n) return "{"; break;
+      case ")": if (r && !n) return "}"; break;
+      case "{": if (!r && !n) return "("; break;
+      case "}": if (!r && !n) return ")"; break;
+    }
+    return i;
+  }).join("");
+}
+const crit = { type: "tags", modifier: "INCLUDES", value: { items: [{ id: "6", label: 'Space (Sci-Fi) {"x"}' }], excluded: [], depth: 0 } };
+const param = CR.criterionParam(crit);
+assert.ok(!/[{}]/.test(decodeURIComponent(param).replace(/"(?:[^"\\]|\\.)*"/g, "")), "no braces outside strings");
+eq(JSON.parse(stashTranslate(new URLSearchParams("c=" + param).get("c"), true)), crit);
+const tagPath = CR.comicsWithTagPath({ id: 6, name: "Space (Sci-Fi)" });
+assert.ok(tagPath.indexOf(CR.ROUTE + "?c=") === 0, tagPath);
+eq(JSON.parse(stashTranslate(new URLSearchParams(tagPath.split("?")[1]).get("c"), true)).value.items, [{ id: "6", label: "Space (Sci-Fi)" }]);
+
+// A date-only value is a local date: never shown as the day before.
+const shown = CR.formatDate("2026-01-01");
+assert.ok(/2026/.test(shown) && /\b1\b/.test(shown) && !/31/.test(shown), shown);
+assert.strictEqual(CR.formatDate(""), "");
+assert.strictEqual(CR.formatDate("not a date"), "not a date");
+
 // ---- nav patches vs Stash's patch chain -----------------------------------
 // Stash (RB / nMt in the v0.31 bundle): each `before` REPLACES the argument
 // list with what it returns; each `instead` gets those arguments plus `next`.
@@ -353,7 +385,7 @@ const ui = {
 };
 ui.window = ui;
 vm.createContext(ui);
-for (const p of ["ui/common.js", "ui/reader.js", "ui/library.js", "ui/builder.js", "ui/inject.js", "ui/main.js"]) vm.runInContext(read(p), ui);
+for (const p of ["ui/common.js", "ui/info.js", "ui/reader.js", "ui/library.js", "ui/builder.js", "ui/inject.js", "ui/main.js"]) vm.runInContext(read(p), ui);
 
 function stashCall(name, target, args) {           // RB, as shipped
   for (const b of patches.before[name] || []) args = b.apply(null, args);

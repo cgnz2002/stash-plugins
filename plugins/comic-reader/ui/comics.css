@@ -88,6 +88,136 @@
   margin: 0.5rem 0 0.75rem;
 }
 
+/* ------------------------------------------------------- details panel */
+
+/* Docked on the left like the details panel of Stash's gallery and scene
+   pages; the pages and toolbars move over to make room. */
+.cr-with-info .cr-stage,
+.cr-with-info .cr-bar,
+.cr-with-info .cr-progress {
+  left: var(--cr-info-w);
+}
+/* The same dark scrim as the toolbars sits behind the card: a theme's card
+   can be translucent (refract's is glass), and the page under it would show
+   through the text. */
+.cr-info {
+  position: absolute;
+  background: rgba(0, 0, 0, 0.85);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.cr-info-docked {
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: var(--cr-info-w);
+  z-index: 3;
+}
+/* On a phone: a sheet over the lower part of the page, closed by the X, a
+   tap on the page above it, or Esc. */
+.cr-info-sheet {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  max-height: 75vh;
+  border-radius: 0.75rem 0.75rem 0 0;
+  z-index: 4;
+}
+/* The theme's card surface. Themes give .card layout too (Stash a margin,
+   refract `position: relative` and full-width images), so these rules sit
+   one class above a theme's `body.x .card ...`. */
+.cr-reader .cr-info > .card.cr-info-card {
+  min-height: 100%;
+  margin: 0;
+  padding: 1rem;
+  border-radius: 0;
+  border-width: 0 1px 0 0;
+}
+.cr-reader .cr-info-sheet > .card.cr-info-card {
+  border-radius: 0.75rem 0.75rem 0 0;
+  border-width: 1px 0 0;
+  padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+}
+.cr-info-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 3;
+}
+.cr-info-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.cr-reader .cr-info .cr-info-studio img {
+  display: block;
+  width: auto;
+  max-width: 180px;
+  max-height: 56px;
+  object-fit: contain;
+}
+.cr-info-close {
+  flex: none;
+}
+.cr-info-title {
+  margin: 0 0 0.25rem;
+  font-size: 1.35rem;
+  overflow-wrap: anywhere;
+}
+.cr-info-meta {
+  margin-bottom: 0.5rem;
+  font-size: 0.85rem;
+}
+.cr-info-rating {
+  margin-bottom: 0.75rem;
+}
+.cr-info-details {
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+.cr-info-section {
+  margin-bottom: 1rem;
+}
+.cr-info-people {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.cr-info-person {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: inherit;
+}
+.cr-reader .cr-info .cr-info-person img {
+  width: 40px;
+  height: 40px;
+  flex: none;
+  border-radius: 50%;
+  object-fit: cover;
+  object-position: top;
+}
+.cr-info-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.cr-info-links .btn {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cr-info-foot {
+  padding-top: 0.25rem;
+}
+
 /* ----------------------------------------------------------------- builder */
 
 .cr-builder-head {
@@ -161,6 +291,8 @@
    backdrop (and whatever a theme does to it) -- the reader should feel like
    Stash's own image viewer. */
 .cr-reader {
+  /* the docked details panel; keep in step with INFO_W in reader.js */
+  --cr-info-w: 340px;
   position: fixed;
   inset: 0;
   z-index: 1040;
