@@ -152,7 +152,8 @@
       return div;
     }, [nav]);
     var state = React.useState(null); // {tags, family, gallery}
-    var busy = React.useState("");
+    var busy = React.useState(false);
+    var toast = CR.useToast();
     var reload = React.useState(0);
 
     React.useEffect(function () {
@@ -173,16 +174,29 @@
       return function () { live = false; };
     }, [id, reload[0]]);
 
+    // This page is where Stash's own "Add" tab and "Remove from gallery"
+    // live, and neither fires a hook -- so a comic's page tags are re-checked
+    // whenever its page is opened.
+    var isComicNow = !!(state[0] && state[0].gallery && CR.isComic(state[0].gallery.tags, state[0].family));
+    React.useEffect(function () {
+      if (isComicNow) CR.runOperation({ mode: "pages", galleryId: id }).catch(function () {});
+    }, [isComicNow, id]);
+
     if (!host || !state[0] || !state[0].gallery) return null;
     var s = state[0];
     var comic = CR.isComic(s.gallery.tags, s.family);
     var webtoon = CR.hasTag(s.gallery.tags, s.tags.webtoon);
 
-    function change(add, remove, label) {
-      busy[1](label);
+    function change(add, remove, done) {
+      busy[1](true);
       CR.editGalleryTags(id, add, remove)
-        .then(function () { busy[1](""); reload[1](reload[0] + 1); CR.refreshStash(); })
-        .catch(function (e) { busy[1]("Failed: " + e.message); });
+        .then(function () {
+          busy[1](false);
+          reload[1](function (n) { return n + 1; });
+          CR.refreshStash();
+          toast.success(done);
+        })
+        .catch(function (e) { busy[1](false); toast.error(e); });
     }
 
     var buttons;
@@ -192,12 +206,12 @@
           CR.linkProps(props.history, CR.readerPath(id))),
           h(CR.Icon, { name: "faBookOpen" }), webtoon ? " Read webtoon" : " Read comic"),
         h("button", {
-          key: "unmark", type: "button", className: "btn btn-secondary btn-sm",
+          key: "unmark", type: "button", className: "btn btn-secondary btn-sm", disabled: busy[0],
           title: "Stop treating this gallery as a comic (it returns to Galleries)",
           onClick: function () {
             var present = s.gallery.tags.map(function (t) { return String(t.id); })
               .filter(function (t) { return s.family.indexOf(t) >= 0; });
-            change([], present, "Unmarking…");
+            change([], present, "No longer a comic; it is back in Galleries");
           },
         }, "Not a comic"),
       ];
@@ -205,16 +219,17 @@
       buttons = [
         h("button", { key: "mark", type: "button", className: "btn btn-primary btn-sm",
                       title: "Read as side-by-side pages; moves it from Galleries to Comics",
-                      onClick: function () { change([s.tags.comic], [], "Marking…"); } },
+                      disabled: busy[0],
+                      onClick: function () { change([s.tags.comic], [], "Marked as a comic"); } },
           h(CR.Icon, { name: "faBookOpen" }), " Mark as comic"),
         h("button", { key: "webtoon", type: "button", className: "btn btn-secondary btn-sm",
                       title: "Read as one continuous vertical scroll; moves it from Galleries to Comics",
-                      onClick: function () { change([s.tags.webtoon], [], "Marking…"); } },
+                      disabled: busy[0],
+                      onClick: function () { change([s.tags.webtoon], [], "Marked as a webtoon"); } },
           "Mark as webtoon"),
       ];
     }
-    return ReactDOM.createPortal(h(React.Fragment, null, buttons,
-      busy[0] ? h("span", { className: "cr-status align-self-center" }, busy[0]) : null), host);
+    return ReactDOM.createPortal(h(React.Fragment, null, buttons), host);
   }
 
   // --------------------------------------------------------------- root

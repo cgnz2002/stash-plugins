@@ -506,9 +506,20 @@ its README. What matters when changing it:
   hierarchical exclusion hides everything. `Comic Page` exists because the
   Images page's filter can't see an image's galleries.
 - **Hooks must stay cheap** — `Gallery.Update.Post` fires for every gallery
-  the sync plugin rewrites. `configuredTags()` makes every hook a no-op until
-  set-up has run; a non-comic update whose `inputFields` doesn't include
-  `tag_ids` returns before any image query.
+  the sync plugin rewrites, `Image.Update.Post` for every image anything
+  rewrites (this plugin's own Comic Page writes included). `Image.Update.Post`
+  returns before any query unless `inputFields` has `gallery_ids`;
+  `configuredTags()` makes every hook a no-op until set-up has run; a non-comic
+  gallery update without `tag_ids` returns before any image query.
+- **`addGalleryImages` / `removeGalleryImages` fire no hooks** (Stash's own
+  gallery Add tab and "Remove from gallery" use them), so opening a comic in
+  the reader or its gallery page runs the per-gallery `pages` operation, and
+  *Set Up Comics* repairs everything.
+- **User choices must survive a repair.** A `.cbz` that loses its comic tags
+  through an edit that lists `tag_ids` gets a `not_comic` custom field (the
+  scan hook and `tagCbzGalleries` skip it; re-marking clears it) -- only on an
+  explicit tag edit, never a scan-time update with no field list. Hide/Show
+  write the `showComicsInLists` setting, which *Set Up* follows.
 - **Never trust `NOT` over a `galleries_filter`.** Stash evaluates it per
   joined gallery row, not per image, so an image in one comic and one
   non-comic gallery matches both `galleries_filter: comic` and
@@ -523,7 +534,9 @@ its README. What matters when changing it:
   would be empty). The saved shape is what the UI writes:
   `tags: {modifier: INCLUDES, value: {items, excluded: [{id,label}], depth}}` —
   there is no EXCLUDES modifier for tags. `hideInFilter`/`showInFilter` merge
-  into a user's existing default filter and must keep everything else.
+  into a user's existing default filter and must keep everything else --
+  including `depth`, which applies to exclusions too: only a criterion the
+  plugin creates gets `depth: -1`; the family is listed id by id instead.
 - **Reading order** is post date, then natural file-name order
   (`CR.sortPages`): a `.cbz` has no dates, and a comic assembled from
   one-page-per-post images must read in release order whatever order they
@@ -538,10 +551,21 @@ its README. What matters when changing it:
   in-page. `register.route` is react-router v5 (`<Route path component>`,
   prefix match), so one route dispatches `/plugins/comics`, `/read/:id` and
   `/new`.
-- **Interplay with of-stash-sync:** a Full Sync replaces `tag_ids` unless
-  `keepManualEdits` is on, which drops the comic tags. The fix belongs in
-  of-stash-sync (always keep tags under `comicTagId`); until then the README
-  tells users to keep that setting on, and *Set Up Comics* repairs page tags.
+- **Interplay with of-stash-sync:** its Full Sync keeps every tag under
+  comic-reader's `comicTagId` (see `ProtectedTags` above), so the settings
+  key names `comicTagId` / `webtoonTagId` / `comicPageTagId` are a contract
+  between the two plugins -- don't rename them.
+- **Look and theming: build from Stash's own parts.** Cards are
+  `PluginApi.components.GridCard` with the `gallery-card` class names, sized
+  like Stash's (`CR.cardWidth` is its `(w-30)/ceil((w-30)/preferred)-10`); the
+  toolbar reuses `.filtered-list-toolbar` markup and the `zoom-slider`;
+  inputs use `clearable-text-field form-control` / `btn-secondary form-control`;
+  messages go through `PluginApi.hooks.useToast`; the spinner is
+  `LoadingIndicator`; the reader's root carries `.Lightbox`. comics.css is
+  layout only -- any colour it needs is `var(--primary)`. GridCard lives in a
+  lazily loaded chunk, so `CR.useCardComponents()` loads
+  `loadableComponents.TagLink` before a grid renders; a plugin route doesn't
+  load it on its own.
 
 ## Hard constraints — keep these intact
 

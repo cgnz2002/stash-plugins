@@ -19,6 +19,10 @@
   var React = CR.React;
   var h = CR.h;
 
+  // Stash's .Lightbox supplies the backdrop, so a theme that restyles the
+  // image viewer restyles the reader too.
+  var ROOT = "Lightbox cr-reader";
+
   function isWide(p) { return p.width > 0 && p.width > p.height * 1.1; }
 
   function buildSpreads(pages, double) {
@@ -221,7 +225,7 @@
     var stripWidth = React.useState(CR.store.get("stripWidth", 800));
     var pos = React.useState(null); // current page index (first page of the spread)
     var scrollProgress = React.useState(0);
-    var status = React.useState("");
+    var toast = CR.useToast();
     var rootRef = React.useRef(null);
 
     // The reader covers the whole window; stop the page behind it scrolling.
@@ -236,9 +240,12 @@
     var gallery = d ? d.gallery : null;
     var tags = d ? d.tags : null;
 
-    var detected = d ? CR.looksLikeWebtoon(pages, tags.ratio) : false;
-    var tagged = d ? CR.hasTag(gallery.tags, tags.webtoon) : false;
-    var pinnedPages = d ? ((gallery.custom_fields || {}).comic_layout === "pages") : false;
+    // `gallery` is null for a deleted gallery or a stale bookmark; that must
+    // reach the "not found" message below rather than throw here.
+    var ok = !!(d && gallery);
+    var detected = ok ? CR.looksLikeWebtoon(pages, tags.ratio) : false;
+    var tagged = ok ? CR.hasTag(gallery.tags, tags.webtoon) : false;
+    var pinnedPages = ok ? ((gallery.custom_fields || {}).comic_layout === "pages") : false;
     var layout = layoutOverride[0] || (tagged ? "scroll" : (detected && !pinnedPages ? "scroll" : "pages"));
 
     var landscape = viewport.w >= viewport.h * 1.05 && viewport.w >= 900;
@@ -252,8 +259,15 @@
       pos[1](saved > 0 && saved < pages.length ? saved : 0);
     }, [d]);
 
-    var page = pos[0] === null ? 0 : pos[0];
+    var page = typeof pos[0] === "number" ? pos[0] : (pos[0] === "end" ? Math.max(0, pages.length - 1) : 0);
     var spreadIndex = pos[0] === "end" ? spreads.length : spreadOf(spreads, page);
+
+    // Stash's gallery "Add" tab and "Remove from gallery" fire no hooks, so
+    // opening a comic re-checks its pages' Comic Page tags. Fire and forget:
+    // it only affects the Images page, never what is being read.
+    React.useEffect(function () {
+      if (ok) CR.runOperation({ mode: "pages", galleryId: galleryId }).catch(function () {});
+    }, [ok, galleryId]);
 
     // Remember the page; finishing a comic means the next read starts over.
     React.useEffect(function () {
@@ -265,12 +279,21 @@
       if (props.onExit) props.onExit();
     }, [props.onExit]);
 
+    // Turn pages from the LATEST position, not the one this render saw: two
+    // quick key presses can both land before React re-renders and re-binds
+    // the key handler, and a closure over spreadIndex would count them once.
+    var spreadsRef = React.useRef(spreads);
+    spreadsRef.current = spreads;
     var go = React.useCallback(function (delta) {
-      var next = spreadIndex + delta;
-      if (next < 0) return;
-      if (next >= spreads.length) { pos[1]("end"); return; }
-      pos[1](spreads[next][0]);
-    }, [spreadIndex, spreads]);
+      pos[1](function (cur) {
+        var sp = spreadsRef.current;
+        var si = cur === "end" ? sp.length : spreadOf(sp, cur || 0);
+        var next = si + delta;
+        if (next < 0 || !sp.length) return cur;
+        if (next >= sp.length) return "end";
+        return sp[next][0];
+      });
+    }, []);
 
     var goTo = function (p) { pos[1](Math.max(0, Math.min(pages.length - 1, p))); };
 
@@ -285,6 +308,8 @@
     React.useEffect(function () {
       function onKey(e) {
         if (e.target && /input|textarea|select/i.test(e.target.tagName)) return;
+        // Alt+Left is the browser's Back, Ctrl+F is find: not page turns.
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
         if (e.key === "Escape") { exit(); return; }
         if (e.key === "f") { toggleFullscreen(); return; }
         if (layout !== "pages") return; // the scroll strip scrolls natively
@@ -292,11 +317,15 @@
         if (k === "ArrowRight" || k === "PageDown" || k === " " || k === "d") { e.preventDefault(); go(1); }
         else if (k === "ArrowLeft" || k === "PageUp" || k === "a") { e.preventDefault(); go(-1); }
         else if (k === "Home") { e.preventDefault(); goTo(0); }
-        else if (k === "End") { e.preventDefault(); pos[1](spreads[spreads.length - 1][0]); }
+        else if (k === "End") {
+          e.preventDefault();
+          var sp = spreadsRef.current;
+          if (sp.length) pos[1](sp[sp.length - 1][0]);
+        }
       }
       window.addEventListener("keydown", onKey);
       return function () { window.removeEventListener("keydown", onKey); };
-    }, [go, layout, spreads, exit]);
+    }, [go, layout, exit]);
 
     function toggleFullscreen() {
       var el = rootRef.current;
@@ -319,9 +348,9 @@
           if (detected) return CR.setCustomField(galleryId, "comic_layout", "pages");
         });
       }
-      status[1]("Saving layout…");
-      work.then(function () { status[1]("Layout saved"); setTimeout(function () { status[1](""); }, 1500); })
-        .catch(function (e) { status[1]("Could not save layout: " + e.message); });
+      work.then(function () {
+        toast.success(next === "scroll" ? "Reads as a webtoon scroll (tagged Webtoon)" : "Reads as pages");
+      }).catch(function (e) { toast.error(e); });
     }
 
     function changeSpread(v) { spreadPref[1](v); CR.store.set("spread", v); }
@@ -331,13 +360,13 @@
       CR.store.set("stripWidth", w);
     }
 
-    if (data.loading) return h("div", { className: "cr-reader" }, h(CR.Loading, { text: "Opening comic…" }));
-    if (data.error) return h("div", { className: "cr-reader" }, h(CR.ErrorBox, { error: data.error }));
-    if (!gallery) return h("div", { className: "cr-reader" }, h("div", { className: "cr-loading" }, "Comic not found."));
+    if (data.loading) return h("div", { className: ROOT }, h(CR.Loading, { text: "Opening comic…" }));
+    if (data.error) return h("div", { className: ROOT }, h(CR.ErrorBox, { error: data.error }));
+    if (!gallery) return h("div", { className: ROOT }, h("div", { className: "cr-loading" }, "Comic not found."));
     // Wait for the resume position so the scroll strip starts in the right place.
-    if (pos[0] === null) return h("div", { className: "cr-reader" }, h(CR.Loading, { text: "Opening comic…" }));
+    if (pos[0] === null) return h("div", { className: ROOT }, h(CR.Loading, { text: "Opening comic…" }));
     if (!pages.length) {
-      return h("div", { className: "cr-reader" },
+      return h("div", { className: ROOT },
         h("div", { className: "cr-end-card" }, h("h3", null, "No pages"),
           h("p", { className: "text-muted" }, "This gallery has no images yet."),
           h(CR.Button, { variant: "primary", onClick: exit }, "Back")));
@@ -361,9 +390,8 @@
         h(CR.Icon, { name: "faArrowLeft" }), " Back"),
       h("div", { className: "cr-title" },
         h("div", { className: "cr-title-main" }, title),
-        gallery.studio ? h("div", { className: "cr-title-sub" }, gallery.studio.name) : null),
+        gallery.studio ? h("div", { className: "cr-title-sub text-muted" }, gallery.studio.name) : null),
       h("div", { className: "cr-bar-group" },
-        status[0] ? h("span", { className: "cr-status" }, status[0]) : null,
         h("span", { className: "cr-counter" }, counter),
         h(Segmented, {
           value: layout, onChange: changeLayout,
@@ -404,13 +432,22 @@
           }))
       : h("div", { className: "cr-progress" }, h("div", { style: { width: (scrollProgress[0] * 100) + "%" } }));
 
-    return h("div", { className: "cr-reader", ref: rootRef, onMouseMove: chrome.show },
+    // Only a real mouse wakes the toolbars on movement: Android sends a
+    // synthetic mousemove before every tap, which would show the bars just as
+    // the tap's own toggle hides them again.
+    return h("div", { className: ROOT, ref: rootRef,
+                      onPointerMove: function (e) { if (e.pointerType === "mouse") chrome.show(); } },
       layout === "pages"
         ? h(PagesView, { pages: pages, spreads: spreads, spreadIndex: spreadIndex, go: go, goTo: goTo,
                          chrome: chrome, title: title, onExit: exit })
         : h(ScrollView, { key: "scroll-" + galleryId, pages: pages, width: stripWidth[0],
                           startPage: page, chrome: chrome, title: title, onExit: exit,
-                          onPage: function (p, frac) { if (p !== pos[0]) pos[1](p); scrollProgress[1](frac); } }),
+                          onPage: function (p, frac) {
+                            scrollProgress[1](frac);
+                            // At the very bottom it counts as finished, so the next read starts over.
+                            var next = frac >= 0.995 ? "end" : p;
+                            if (next !== pos[0]) pos[1](next);
+                          } }),
       topBar,
       bottom);
   }

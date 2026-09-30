@@ -1,136 +1,49 @@
-/* Comic Reader. Everything is prefixed cr- so it can't leak into Stash. */
+/* Comic Reader.
+ *
+ * Layout and sizing only, wherever possible. Colours, card surfaces, buttons,
+ * badges and inputs come from Stash's own classes (card, grid-card,
+ * gallery-card, btn-*, badge-*, text-muted, Lightbox), so a Stash theme or
+ * Custom CSS restyles this plugin along with everything else. Where a colour
+ * is unavoidable it is the theme's --primary. Everything here is prefixed cr-.
+ */
 
 /* ---------------------------------------------------------------- library */
 
 .cr-library {
-  padding: 1rem 1.25rem 3rem;
-}
-.cr-header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  margin-bottom: 1rem;
-}
-.cr-header h2 {
-  margin: 0;
-}
-.cr-header-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-}
-.cr-controls {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 1rem;
-}
-.cr-controls .cr-search {
-  flex: 1 1 220px;
-  max-width: 360px;
-}
-.cr-controls .cr-select {
-  flex: 0 0 auto;
-  width: auto;
+  padding-top: 0.5rem;
 }
 .cr-group {
-  margin-bottom: 1.5rem;
+  margin-bottom: 1rem;
 }
 .cr-group-title {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  padding-bottom: 0.35rem;
-  margin-bottom: 0.75rem;
+  margin: 0.75rem 15px 0.5rem;
 }
-.cr-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 1rem;
-}
-.cr-card {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-.cr-card-cover {
-  position: relative;
-  display: block;
-  aspect-ratio: 2 / 3;
-  border-radius: 6px;
-  overflow: hidden;
-  background: rgba(0, 0, 0, 0.35);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
-  transition: transform 0.12s ease, box-shadow 0.12s ease;
-}
-.cr-card-cover:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5);
-}
-.cr-card-cover img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  object-position: top;
-}
-.cr-badge {
-  position: absolute;
-  top: 6px;
-  left: 6px;
-  padding: 1px 7px;
-  border-radius: 10px;
-  font-size: 0.72rem;
-  font-weight: 600;
-  background: rgba(20, 120, 90, 0.9);
-  color: #fff;
-}
-.cr-card-progress {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 4px;
-  background: rgba(0, 0, 0, 0.5);
-}
-.cr-card-progress > div {
-  height: 100%;
-  background: #3b9cff;
-}
-.cr-card-body {
-  padding: 0.4rem 0.1rem 0;
-  min-width: 0;
-}
-.cr-card-title {
-  color: inherit;
-  font-weight: 600;
-  line-height: 1.25;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-}
-.cr-card-title:hover {
-  color: inherit;
-}
-.cr-card-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.15rem 0.6rem;
-  font-size: 0.8rem;
-  opacity: 0.7;
-}
-.cr-card-gallery {
-  margin-left: auto;
+.cr-group-title a {
   color: inherit;
 }
 .cr-empty,
 .cr-loading {
   padding: 2rem 1rem;
   text-align: center;
-  opacity: 0.75;
+}
+
+/* Comic covers are portrait: keep the card's image box 2:3 at every zoom
+   level instead of Stash's fixed landscape-gallery heights. */
+.gallery-card.cr-comic-card .gallery-card-image {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 2 / 3;
+  object-fit: cover;
+  object-position: top;
+}
+.cr-comic-card .thumbnail-section {
+  position: relative;
+}
+.cr-format-badge {
+  position: absolute;
+  top: 0.7rem;
+  left: 0.7rem;
+  z-index: 2;
 }
 
 /* ------------------------------------------------------ performer/studio tab */
@@ -139,10 +52,10 @@
   padding-top: 1rem;
 }
 /* While the Comics tab is showing, Stash still marks its own active tab;
-   draw that one as inactive so only Comics looks selected. */
+   draw that one like an inactive tab so only Comics looks selected. */
 .cr-comics-active .nav-link.active:not(.cr-tab) {
   color: inherit;
-  background: transparent;
+  background-color: transparent;
   border-color: transparent;
 }
 .cr-comics-active .nav-link.active:not(.cr-tab)::after {
@@ -150,9 +63,6 @@
 }
 .cr-tab {
   cursor: pointer;
-}
-.cr-tab .badge {
-  margin-left: 0.4rem;
 }
 
 /* ------------------------------------------------------------ gallery page */
@@ -164,14 +74,82 @@
   margin: 0.5rem 0 0.75rem;
 }
 
+/* ----------------------------------------------------------------- builder */
+
+.cr-builder-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+.cr-builder {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 1rem;
+  align-items: start;
+}
+.cr-check {
+  align-items: center;
+}
+/* Picked pages: the card's own checkbox shows it, the outline makes it
+   visible at a glance -- in the theme's primary colour. */
+.cr-pick.cr-picked {
+  box-shadow: 0 0 0 2px var(--primary);
+}
+.cr-pick .image-card-preview {
+  height: 180px;
+}
+.cr-builder-panel {
+  position: sticky;
+  top: 4.5rem;
+}
+.cr-order-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 1rem;
+  font-size: 0.8rem;
+}
+.cr-order {
+  max-height: 45vh;
+  overflow-y: auto;
+  margin: 0;
+  padding-left: 1.4rem;
+  font-size: 0.85rem;
+}
+.cr-order li {
+  margin-bottom: 0.3rem;
+}
+.cr-order li img {
+  width: 28px;
+  height: 36px;
+  object-fit: cover;
+  border-radius: 2px;
+  margin-right: 0.4rem;
+  vertical-align: middle;
+}
+.cr-order li .btn {
+  padding: 0 0.3rem;
+}
+
+@media (max-width: 900px) {
+  .cr-builder {
+    grid-template-columns: 1fr;
+  }
+  .cr-builder-panel {
+    position: static;
+  }
+}
+
 /* ------------------------------------------------------------------ reader */
 
+/* The root also carries Stash's .Lightbox class, which supplies the
+   backdrop (and whatever a theme does to it) -- the reader should feel like
+   Stash's own image viewer. */
 .cr-reader {
   position: fixed;
   inset: 0;
   z-index: 1040;
-  background: #0b0b0d;
-  color: #eee;
   user-select: none;
   -webkit-user-select: none;
 }
@@ -238,6 +216,8 @@
   justify-content: center;
   gap: 0.5rem;
 }
+/* Toolbars float over the page like the lightbox's header; the dark scrim is
+   only there to keep the controls legible over bright artwork. */
 .cr-bar {
   position: absolute;
   left: 0;
@@ -246,7 +226,7 @@
   align-items: center;
   gap: 0.6rem;
   padding: 0.5rem 0.75rem;
-  background: linear-gradient(rgba(0, 0, 0, 0.85), rgba(0, 0, 0, 0.6));
+  background: linear-gradient(rgba(0, 0, 0, 0.75), rgba(0, 0, 0, 0.45));
   transition: opacity 0.25s ease, transform 0.25s ease;
   z-index: 2;
 }
@@ -255,7 +235,7 @@
 }
 .cr-bar-bottom {
   bottom: 0;
-  background: linear-gradient(rgba(0, 0, 0, 0.6), rgba(0, 0, 0, 0.85));
+  background: linear-gradient(rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0.75));
 }
 .cr-bar.cr-hidden {
   opacity: 0;
@@ -279,7 +259,6 @@
 }
 .cr-title-sub {
   font-size: 0.8rem;
-  opacity: 0.7;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -293,16 +272,12 @@
 }
 .cr-counter {
   font-variant-numeric: tabular-nums;
-  opacity: 0.85;
   min-width: 4.5em;
   text-align: right;
 }
-.cr-status {
-  font-size: 0.8rem;
-  opacity: 0.8;
-}
 .cr-slider {
   width: 100%;
+  accent-color: var(--primary);
 }
 .cr-progress {
   position: absolute;
@@ -310,13 +285,12 @@
   right: 0;
   bottom: 0;
   height: 3px;
-  background: rgba(255, 255, 255, 0.08);
   z-index: 2;
   pointer-events: none;
 }
 .cr-progress > div {
   height: 100%;
-  background: #3b9cff;
+  background-color: var(--primary);
 }
 .cr-reader .cr-loading,
 .cr-reader .cr-error {
@@ -326,7 +300,7 @@
   right: 0;
 }
 
-/* Phones: fewer controls on one line, full-width strip. */
+/* Phones: controls wrap under the title, and the strip is full width. */
 @media (max-width: 700px) {
   .cr-bar-top {
     flex-wrap: wrap;
@@ -341,134 +315,5 @@
   }
   .cr-strip {
     max-width: 100% !important;
-  }
-  .cr-grid {
-    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-    gap: 0.75rem;
-  }
-}
-
-/* ----------------------------------------------------------------- builder */
-
-.cr-builder {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
-  gap: 1.25rem;
-  align-items: start;
-}
-.cr-check {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  margin: 0;
-  white-space: nowrap;
-}
-.cr-builder-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 0.5rem;
-  font-size: 0.85rem;
-}
-.cr-pick-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-  gap: 0.6rem;
-  margin-bottom: 1rem;
-}
-.cr-pick {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  padding: 0;
-  border: 2px solid transparent;
-  border-radius: 6px;
-  background: rgba(0, 0, 0, 0.25);
-  color: inherit;
-  overflow: hidden;
-  text-align: left;
-}
-.cr-pick img {
-  width: 100%;
-  aspect-ratio: 3 / 4;
-  object-fit: cover;
-  object-position: top;
-}
-.cr-pick-label {
-  padding: 0.2rem 0.35rem;
-  font-size: 0.72rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  opacity: 0.8;
-}
-.cr-picked {
-  border-color: #3b9cff;
-}
-.cr-pick-check {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  width: 24px;
-  height: 24px;
-  border-radius: 12px;
-  background: #3b9cff;
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.8rem;
-}
-.cr-builder-panel {
-  position: sticky;
-  top: 4.5rem;
-  padding: 1rem;
-  border-radius: 6px;
-  background: rgba(0, 0, 0, 0.25);
-}
-.cr-field {
-  display: block;
-  margin-bottom: 0.75rem;
-  font-size: 0.85rem;
-}
-.cr-field input,
-.cr-field .btn-group {
-  margin-top: 0.25rem;
-}
-.cr-order-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: 1rem;
-  font-size: 0.8rem;
-}
-.cr-order {
-  max-height: 45vh;
-  overflow-y: auto;
-  margin: 0;
-  padding-left: 1.4rem;
-  font-size: 0.8rem;
-}
-.cr-order li {
-  margin-bottom: 0.3rem;
-}
-.cr-order li img {
-  width: 28px;
-  height: 36px;
-  object-fit: cover;
-  border-radius: 2px;
-  margin-right: 0.4rem;
-  vertical-align: middle;
-}
-.cr-order li .btn {
-  padding: 0 0.3rem;
-}
-
-@media (max-width: 900px) {
-  .cr-builder {
-    grid-template-columns: 1fr;
-  }
-  .cr-builder-panel {
-    position: static;
   }
 }

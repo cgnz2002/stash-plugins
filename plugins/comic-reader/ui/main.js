@@ -19,8 +19,10 @@
     var read = path.match(/^\/plugins\/comics\/read\/(\d+)$/);
 
     if (read) {
+      // Keyed by gallery: going straight from one comic to another must not
+      // carry the first one's position (and save it over the second's).
       return h(CR.Reader, {
-        galleryId: read[1], history: history,
+        key: read[1], galleryId: read[1], history: history,
         // Back to wherever the comic was opened from; a reader opened
         // directly (bookmark, new tab) has nowhere in the app to go back to.
         onExit: function () {

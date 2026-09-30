@@ -232,7 +232,7 @@ function imagesWithGalleries(filter) {
 // the NOT stripped real comic pages. It is still used, as a cheap candidate
 // list -- whichever way Stash evaluates it, it returns at least every image
 // with a non-comic gallery -- plus the pages left in no gallery at all.
-function removablePages(tags, galleryId) {
+function removablePages(tags, galleryId, familySet) {
   var base = function () { return { tags: { value: [tags.comicPageTagId], modifier: "INCLUDES" } }; };
   var candidates;
   if (galleryId) {
@@ -246,7 +246,7 @@ function removablePages(tags, galleryId) {
     none.galleries = { value: [], modifier: "IS_NULL" };
     candidates = imagesWithGalleries(some).concat(imagesWithGalleries(none));
   }
-  var family = idSet(comicFamily(tags));
+  var family = familySet || idSet(comicFamily(tags));
   var out = [];
   var seen = {};
   for (var i = 0; i < candidates.length; i++) {
@@ -262,14 +262,14 @@ function removablePages(tags, galleryId) {
   return out;
 }
 
-function syncGalleryPages(tags, galleryId, isComic) {
+function syncGalleryPages(tags, galleryId, isComic, familySet) {
   if (isComic) {
     var missing = imageIds({ galleries: { value: [String(galleryId)], modifier: "INCLUDES" },
                              tags: { value: [tags.comicPageTagId], modifier: "EXCLUDES" } });
     if (missing.length) bulkImageTags(missing, tags.comicPageTagId, "ADD");
     return missing.length;
   }
-  var stale = removablePages(tags, galleryId);
+  var stale = removablePages(tags, galleryId, familySet);
   if (stale.length) bulkImageTags(stale, tags.comicPageTagId, "REMOVE");
   return -stale.length;
 }
@@ -284,14 +284,26 @@ function isCbz(files) {
   return false;
 }
 
-// Every .cbz gallery that isn't a comic yet. Stash's path filter is a
-// case-insensitive substring match, so the extension is re-checked here.
+// A .cbz the user said is not a comic. Recorded on the gallery itself (a
+// custom field, visible and editable in Stash) whenever a .cbz loses its
+// comic tags, so neither the scan hook nor "Set Up Comics" marks it again.
+var OPT_OUT = "not_comic";
+
+function optedOut(gallery) {
+  var cf = (gallery && gallery.custom_fields) || {};
+  return !!cf[OPT_OUT];
+}
+
+// Every .cbz gallery that isn't a comic yet, and wasn't unmarked by the user.
+// Stash's path filter is a case-insensitive substring match, so the extension
+// is re-checked here.
 function tagCbzGalleries(tags, familyIds) {
-  var data = gql.Do('query { findGalleries(gallery_filter: {path: {value: ".cbz", modifier: INCLUDES}}, filter: {per_page: -1}) { galleries { id files { path } tags { id } } } }');
+  var data = gql.Do('query { findGalleries(gallery_filter: {path: {value: ".cbz", modifier: INCLUDES}}, filter: {per_page: -1}) { galleries { id files { path } tags { id } custom_fields } } }');
   var ids = [];
   var list = data.findGalleries.galleries;
   for (var i = 0; i < list.length; i++) {
-    if (isCbz(list[i].files) && !isComicTags(list[i].tags, familyIds)) ids.push(list[i].id);
+    var g = list[i];
+    if (isCbz(g.files) && !isComicTags(g.tags, familyIds) && !optedOut(g)) ids.push(g.id);
   }
   if (ids.length) {
     gql.Do("mutation ($input: BulkGalleryUpdateInput!) { bulkGalleryUpdate(input: $input) { id } }",
@@ -316,6 +328,9 @@ function hideInFilter(saved, mode, family) {
   filter.object_filter = filter.object_filter || {};
   var crit = filter.object_filter.tags;
   if (!crit) {
+    // Only a criterion created here gets depth -1. Depth applies to a
+    // criterion's exclusions too, so changing it on the user's own criterion
+    // would quietly turn their "exclude X" into "exclude X and its children".
     crit = { modifier: "INCLUDES", value: { items: [], excluded: [], depth: -1 } };
   }
   crit.value = crit.value || { items: [], excluded: [], depth: -1 };
@@ -326,18 +341,18 @@ function hideInFilter(saved, mode, family) {
     // exclusions (the UI clears them), so there is nothing safe to add.
     return null;
   }
+  if (crit.value.depth === undefined) crit.value.depth = 0;
   var have = {};
   for (var i = 0; i < crit.value.excluded.length; i++) have[String(crit.value.excluded[i].id)] = true;
   var added = false;
   // Every family member is listed explicitly rather than relying on depth, so
-  // a user filter that includes tags at depth 0 keeps its meaning.
+  // the filter hides every comic tag whatever depth the criterion has.
   for (var j = 0; j < family.length; j++) {
     if (!have[family[j].id]) {
       crit.value.excluded.push({ id: family[j].id, label: family[j].name });
       added = true;
     }
   }
-  if (!crit.value.items.length) crit.value.depth = -1;
   filter.object_filter.tags = crit;
   return added ? filter : null;
 }
@@ -386,15 +401,42 @@ function ctxField(ctx, name) {
 function onHook(ctx) {
   var type = ctxField(ctx, "type");
   var id = ctxField(ctx, "id");
+  var fields = ctxField(ctx, "inputFields");
+
+  // Image.Update.Post fires for every image edit in the library -- including
+  // this plugin's own Comic Page writes and every image the sync plugin
+  // rewrites -- so it bails out before any query unless the edit moved the
+  // image between galleries (image edit / bulk edit "Galleries").
+  if (type === "Image.Update.Post" && (!fields || fields.indexOf("gallery_ids") < 0)) return "skipped";
+
   var tags = configuredTags();
   if (!tags || !type) return "not set up";
 
   if (type === "Gallery.Destroy.Post") {
     // The gallery is gone, so there is no way to ask which images it held;
-    // tidy the whole library instead (one query unless something changed).
+    // re-check every Comic Page image that isn't safely inside a comic. That
+    // is a library-wide query per deleted gallery -- cheap for one delete,
+    // noticeable when a Clean task removes many galleries at once.
     var stale = removablePages(tags, null);
     if (stale.length) bulkImageTags(stale, tags.comicPageTagId, "REMOVE");
     return "untagged " + stale.length;
+  }
+
+  if (type === "Image.Update.Post") {
+    var moved = gql.Do("query ($id: ID!) { findImage(id: $id) { id tags { id } galleries { tags { id } } } }",
+      { id: String(id) }).findImage;
+    if (!moved) return "no image";
+    var fs = idSet(comicFamily(tags));
+    var inComic = false;
+    for (var k = 0; k < (moved.galleries || []).length; k++) {
+      if (isComicTags(moved.galleries[k].tags, fs)) { inComic = true; break; }
+    }
+    var only = {};
+    only[tags.comicPageTagId] = true;
+    var tagged = isComicTags(moved.tags, only);
+    if (inComic && !tagged) { bulkImageTags([moved.id], tags.comicPageTagId, "ADD"); return "tagged page"; }
+    if (!inComic && tagged) { bulkImageTags([moved.id], tags.comicPageTagId, "REMOVE"); return "untagged page"; }
+    return "unchanged";
   }
 
   if (type === "Image.Create.Post") {
@@ -418,12 +460,25 @@ function onHook(ctx) {
   }
 
   if (type === "Gallery.Create.Post" || type === "Gallery.Update.Post") {
-    var gal = gql.Do("query ($id: ID!) { findGallery(id: $id) { id files { path } tags { id } } }",
+    var gal = gql.Do("query ($id: ID!) { findGallery(id: $id) { id files { path } tags { id } custom_fields } }",
       { id: String(id) }).findGallery;
     if (!gal) return "no gallery";
     var fam = idSet(comicFamily(tags));
     var comic = isComicTags(gal.tags, fam);
-    if (type === "Gallery.Create.Post" && !comic && isCbz(gal.files)) {
+    // No field list (scan-time updates) means the tags MAY have changed.
+    var tagEdit = !fields || !fields.length || fields.indexOf("tag_ids") >= 0;
+    // Remember a .cbz the user unmarked (by any route: the gallery button,
+    // Stash's tag editor, bulk edit), and forget it once it's a comic again.
+    // Only on an edit that says it touched tags: a scan-time update of a .cbz
+    // that simply hasn't been set up yet must not be recorded as a "no".
+    var explicitTagEdit = !!fields && fields.indexOf("tag_ids") >= 0;
+    if (type === "Gallery.Update.Post" && explicitTagEdit && isCbz(gal.files) && comic === optedOut(gal)) {
+      var cf = comic ? { remove: [OPT_OUT] } : { partial: {} };
+      if (!comic) cf.partial[OPT_OUT] = "true";
+      gql.Do("mutation ($input: GalleryUpdateInput!) { galleryUpdate(input: $input) { id } }",
+        { input: { id: gal.id, custom_fields: cf } });
+    }
+    if (type === "Gallery.Create.Post" && !comic && isCbz(gal.files) && !optedOut(gal)) {
       // This update fires Gallery.Update.Post, which tags whatever pages
       // exist so far; later pages are caught by Image.Create.Post.
       gql.Do("mutation ($input: BulkGalleryUpdateInput!) { bulkGalleryUpdate(input: $input) { id } }",
@@ -434,9 +489,8 @@ function onHook(ctx) {
     // A non-comic update that didn't touch tags can't have unmarked a comic,
     // so there is nothing to untag -- skip the query. This keeps a big sync
     // that rewrites thousands of galleries cheap.
-    var fields = ctxField(ctx, "inputFields");
-    if (!comic && fields && fields.length && fields.indexOf("tag_ids") < 0) return "skipped";
-    var n = syncGalleryPages(tags, gal.id, comic);
+    if (!comic && !tagEdit) return "skipped";
+    var n = syncGalleryPages(tags, gal.id, comic, fam);
     return (n >= 0 ? "tagged " : "untagged ") + Math.abs(n);
   }
   return "ignored " + type;
@@ -474,6 +528,9 @@ function main() {
     if (mode === "setup") {
       progress(args, 0);
       var tags = ensureTags();
+      // Hiding follows the user's last Hide/Show choice (the
+      // showComicsInLists setting), so a repair never undoes a "Show".
+      var show = String(readConfig().showComicsInLists) === "true";
       var family = comicFamily(tags);
       progress(args, 0.2);
       var cbz = tagCbzGalleries(tags, idSet(family));
@@ -482,13 +539,15 @@ function main() {
       var pages = refreshAllPages(tags);
       log.Info("[comic-reader] Comic pages: tagged " + pages.tagged + ", untagged " + pages.untagged);
       progress(args, 0.8);
-      var views = setDefaultFilters(tags, true);
-      log.Info("[comic-reader] Hid comics from: " + (views.length ? views.join(", ") : "(already hidden everywhere)"));
+      var views = setDefaultFilters(tags, !show);
+      if (show) log.Info("[comic-reader] Comics are set to show in Galleries and Images (run Hide Comics from Galleries and Images to change that)");
+      else log.Info("[comic-reader] Hid comics from: " + (views.length ? views.join(", ") : "(already hidden everywhere)"));
       progress(args, 1);
       return { Output: { tags: tags, cbz: cbz, pages: pages, hidden: views } };
     }
     if (mode === "hide" || mode === "show") {
       var tg = ensureTags();
+      writeConfig({ showComicsInLists: mode === "show" });
       var changed = setDefaultFilters(tg, mode === "hide");
       log.Info("[comic-reader] " + (mode === "hide" ? "Hid comics from: " : "Showed comics again in: ") +
         (changed.length ? changed.join(", ") : "(nothing to change)"));

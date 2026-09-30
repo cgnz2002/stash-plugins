@@ -144,7 +144,7 @@
   CR.GALLERY_FIELDS =
     "id title date created_at image_count custom_fields " +
     "files { path } folder { path } paths { cover } " +
-    "studio { id name } performers { id name } tags { id name }";
+    "studio { id name image_path } performers { id name } tags { id name }";
 
   function basename(p) {
     var parts = String(p || "").split(/[\\/]/);
@@ -166,6 +166,17 @@
       return { key: "p" + g.performers[0].id, name: g.performers[0].name };
     }
     return { key: "none", name: "Unknown creator" };
+  };
+
+  // Stash's interface settings that change how cards look (cached).
+  var uiConfig = null;
+  CR.uiConfig = function () {
+    if (!uiConfig) {
+      uiConfig = CR.gql("query { configuration { interface { showStudioAsText } } }")
+        .then(function (d) { return d.configuration.interface || {}; })
+        .catch(function () { uiConfig = null; return {}; });
+    }
+    return uiConfig;
   };
 
   CR.findComics = function (extraFilter) {
@@ -255,8 +266,62 @@
     return CR.h("button", Object.assign({ className: "btn btn-" + (props.variant || "secondary") }, props), props.children);
   };
 
+  // Stash's own spinner, so themes that restyle it restyle ours too.
   CR.Loading = function (props) {
+    var LI = api.components && api.components.LoadingIndicator;
+    if (LI) return CR.h(LI, { message: props.text });
     return CR.h("div", { className: "cr-loading" }, props.text || "Loading…");
+  };
+
+  // Stash's toasts (the same ones its own pages use for "Updated gallery").
+  var noToast = {
+    success: function (m) { console.info("[comic-reader]", m); },
+    error: function (e) { console.error("[comic-reader]", e); },
+  };
+  CR.useToast = function () {
+    var use = api.hooks && api.hooks.useToast;
+    return use ? use() : noToast;
+  };
+
+  // GridCard (Stash's card, used by every list page) lives in a lazily loaded
+  // chunk that a plugin route doesn't trigger by itself. Load it, and render
+  // nothing until it is there. Returns true while loading.
+  CR.useCardComponents = function () {
+    var use = api.hooks && api.hooks.useLoadComponents;
+    var chunk = api.loadableComponents && api.loadableComponents.TagLink;
+    var loading = use && chunk ? use([chunk]) : false;
+    return loading && !(api.components && api.components.GridCard);
+  };
+
+  // Stash's card sizing (TagLink chunk, v0.31): fill the row with cards as
+  // close to the zoom level's preferred width as fits. GridCard ignores the
+  // width on phones, where CSS makes cards full width.
+  CR.cardWidth = function (containerWidth, preferred) {
+    if (!containerWidth) return preferred;
+    var usable = containerWidth - 30;
+    return usable / Math.ceil(usable / preferred) - 10;
+  };
+
+  // [callback ref, width] -- a callback ref, so the observer attaches whenever
+  // the element actually mounts (it may render after a loading state).
+  CR.useContainerWidth = function () {
+    var node = React.useState(null);
+    var width = React.useState(0);
+    var ref = React.useCallback(function (el) { node[1](el); }, []);
+    React.useEffect(function () {
+      var el = node[0];
+      if (!el) return;
+      var last = el.getBoundingClientRect().width;
+      width[1](last);
+      if (typeof ResizeObserver === "undefined") return;
+      var ro = new ResizeObserver(function (entries) {
+        var w = entries[0].contentRect.width;
+        if (Math.abs(w - last) > 20) { last = w; width[1](w); }
+      });
+      ro.observe(el);
+      return function () { ro.disconnect(); };
+    }, [node[0]]);
+    return [ref, width[0]];
   };
 
   CR.ErrorBox = function (props) {

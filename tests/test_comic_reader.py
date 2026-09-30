@@ -73,11 +73,25 @@ for rel in exec_files + ui_files:
 js = [p for p in ui_files if p.endswith(".js")]
 assert js[0] == "ui/common.js" and js[-1] == "ui/main.js", js
 
-triggers = [l.strip()[2:] for l in block("hooks") if re.match(r"^\s+- [A-Z]\w*\.\w+\.Post$", l)]
+# Keys one level into tasks / hooks / settings (pkg/plugin/config.go). Stash
+# rejects the whole plugin on an unknown one, a typo included.
+TASK_KEYS = {"name", "description", "defaultArgs", "execArgs"}
+HOOK_KEYS = TASK_KEYS | {"triggeredBy"}
+SETTING_KEYS = {"displayName", "description", "type"}
+for section, allowed, indent in [("tasks", TASK_KEYS, r"^  (?:- )?(\w+):"), ("hooks", HOOK_KEYS, r"^  (?:- )?(\w+):"),
+                                 ("settings", SETTING_KEYS, r"^    (\w+):")]:
+    keys = {m.group(1) for m in (re.match(indent, l) for l in block(section)) if m}
+    assert keys and keys <= allowed, "{}: unknown keys {}".format(section, keys - allowed)
+
+# Every list item under triggeredBy must be a trigger Stash knows -- matched
+# loosely first, so a mis-cased "gallery.update.post" is flagged, not skipped.
+triggers = [l.strip()[2:] for l in block("hooks")
+            if re.match(r"^\s+- \w+\.\w+\.\w+\s*$", l)]
 assert triggers, "no hook triggers found"
 bad = [t for t in triggers if t not in TRIGGERS]
 assert not bad, "hook triggers Stash doesn't know (they would never fire): {}".format(bad)
-for needed in ("Gallery.Create.Post", "Image.Create.Post", "Gallery.Update.Post", "Gallery.Destroy.Post"):
+for needed in ("Gallery.Create.Post", "Image.Create.Post", "Gallery.Update.Post", "Gallery.Destroy.Post",
+               "Image.Update.Post"):
     assert needed in triggers, needed
 
 types = re.findall(r"^\s+type: (\w+)$", "\n".join(block("settings")), re.M)
@@ -149,6 +163,12 @@ eq(exIds(f), ["8", "1", "2", "3"]);
 assert.strictEqual(f.object_filter.tags.value.depth, 0, "a user's depth-0 include must keep its meaning");
 eq(f.object_filter.organized, user.object_filter.organized);
 eq(f.find_filter, user.find_filter);
+// a user's exclude-only criterion keeps its depth: depth applies to the
+// exclusions too, so forcing -1 would widen "exclude X" to X's children
+const exOnly = { object_filter: { tags: { modifier: "INCLUDES", value: { items: [], excluded: [{ id: "8", label: "Meh" }], depth: 0 } } } };
+const fx = be.hideInFilter(JSON.parse(JSON.stringify(exOnly)), "GALLERIES", family);
+assert.strictEqual(fx.object_filter.tags.value.depth, 0);
+eq(exIds(fx), ["8", "1", "2", "3"]);
 // "has any tag" can't carry exclusions in the UI: leave it alone
 assert.strictEqual(be.hideInFilter({ object_filter: { tags: { modifier: "NOT_NULL" } } }, "GALLERIES", family), null);
 
@@ -202,6 +222,53 @@ responder = respond((q) => {
 });
 assert.strictEqual(be.onHook({ type: "Gallery.Update.Post", id: 4, inputFields: ["title", "date"] }), "skipped");
 assert.ok(!calls.some((q) => q.indexOf("findImages") >= 0));
+
+// an image edit that didn't move it between galleries costs nothing -- not
+// even the config read -- because every image the sync plugin rewrites fires it
+calls.length = 0;
+responder = () => { throw new Error("no query expected"); };
+assert.strictEqual(be.onHook({ type: "Image.Update.Post", id: 1, inputFields: ["tag_ids", "ids"] }), "skipped");
+assert.strictEqual(be.onHook({ type: "Image.Update.Post", id: 1 }), "skipped");
+assert.strictEqual(calls.length, 0);
+
+// .cbz opt-out: unmarking a .cbz by editing its tags records "not_comic";
+// a scan-time update (no field list) never does; Set Up skips opted-out ones
+const writes = [];
+function cbzGallery(tagList, cf) {
+  return respond((q, v) => {
+    if (q.indexOf("findGallery(") >= 0) return { findGallery: { id: "9", files: [{ path: "/c/x.cbz" }], tags: tagList, custom_fields: cf } };
+    if (q.indexOf("mutation") >= 0) { writes.push(v.input); return {}; }
+    if (q.indexOf("findImages") >= 0) return { findImages: { images: [] } };
+    throw new Error("unexpected query " + q);
+  });
+}
+writes.length = 0;
+responder = cbzGallery([], {});
+be.onHook({ type: "Gallery.Update.Post", id: 9, inputFields: ["id", "tag_ids"] });
+eq(writes.filter((w) => w.custom_fields).map((w) => w.custom_fields), [{ partial: { not_comic: "true" } }]);
+writes.length = 0;
+be.onHook({ type: "Gallery.Update.Post", id: 9 });
+assert.strictEqual(writes.filter((w) => w.custom_fields).length, 0, "no field list: not a user's tag edit");
+writes.length = 0;
+responder = cbzGallery([{ id: "1" }], { not_comic: "true" });
+be.onHook({ type: "Gallery.Update.Post", id: 9, inputFields: ["tag_ids"] });
+eq(writes.filter((w) => w.custom_fields).map((w) => w.custom_fields), [{ remove: ["not_comic"] }]);
+// a newly scanned .cbz the user already said no to stays unmarked
+writes.length = 0;
+responder = cbzGallery([], { not_comic: "true" });
+be.onHook({ type: "Gallery.Create.Post", id: 9 });
+assert.ok(!writes.some((w) => w.tag_ids), "opted-out .cbz must not be re-marked on scan");
+writes.length = 0;
+responder = respond((q, v) => {
+  if (q.indexOf("findGalleries") >= 0) return { findGalleries: { galleries: [
+    { id: "1", files: [{ path: "/a.cbz" }], tags: [], custom_fields: {} },
+    { id: "2", files: [{ path: "/b.cbz" }], tags: [], custom_fields: { not_comic: "true" } },
+    { id: "3", files: [{ path: "/c.cbz" }], tags: [{ id: "2" }], custom_fields: {} } ] } };
+  if (q.indexOf("mutation") >= 0) { writes.push(v.input); return {}; }
+  throw new Error("unexpected query " + q);
+});
+assert.strictEqual(be.tagCbzGalleries(tags, { "1": true, "2": true, "3": true }), 1);
+eq(writes[0].ids, ["1"]);
 
 // hooks stay inert until the plugin has been set up
 responder = (q) => ({ configuration: { plugins: {} } });

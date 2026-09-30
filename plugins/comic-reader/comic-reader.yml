@@ -16,6 +16,10 @@ settings:
     displayName: Comic Page Tag ID
     description: "Put on every image inside a comic, so the Images page can hide comic pages. Kept up to date by the plugin - you never need to add it yourself. Filled in automatically."
     type: STRING
+  showComicsInLists:
+    displayName: Show Comics in Galleries and Images
+    description: "Off (the default): comics are left out of the Galleries and Images pages, and out of the Galleries and Images tabs on performer and studio pages - they have their own Comics section and tabs. The 'Hide Comics...' and 'Show Comics...' tasks switch this and apply it straight away; if you change it here, run Set Up Comics to apply it."
+    type: BOOLEAN
   webtoonRatio:
     displayName: Webtoon Page Ratio
     description: "A comic without the Webtoon tag still opens as a scroll when its pages are this many times taller than they are wide (tall strips). Default: 2"
@@ -34,16 +38,17 @@ hooks:
     defaultArgs:
       mode: hook
   - name: Keep comic pages tagged
-    description: Adds or removes the Comic Page tag on a gallery's images when it is marked or unmarked as a comic, or deleted.
+    description: Adds or removes the Comic Page tag on a gallery's images when it is marked or unmarked as a comic or deleted, or when an image is moved in or out of a comic.
     triggeredBy:
       - Gallery.Update.Post
       - Gallery.Destroy.Post
+      - Image.Update.Post
     defaultArgs:
       mode: hook
 
 tasks:
   - name: Set Up Comics
-    description: Creates the Comic, Webtoon and Comic Page tags, marks every .cbz gallery as a comic, tags every comic's pages and hides comics from the Galleries and Images pages. Safe to run again at any time to repair things.
+    description: Creates the Comic, Webtoon and Comic Page tags, marks every .cbz gallery as a comic (except any you unmarked), tags every comic's pages and hides comics from the Galleries and Images pages (unless you chose to show them). Safe to run again at any time to repair things.
     defaultArgs:
       mode: setup
       task: "true"

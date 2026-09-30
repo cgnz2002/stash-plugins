@@ -37,8 +37,9 @@ Settings → Tasks → Plugin Tasks → **Set Up Comics**. It:
    and Images tabs on performer and studio pages
 
 It is safe to run again at any time. It only adds what is missing, so it
-doubles as a repair. The same task is also the **Set up / repair** button on
-the Comics page.
+doubles as a repair. It never re-marks a `.cbz` you said is not a comic, and
+if you chose **Show Comics in Galleries and Images** it leaves them showing.
+The same task is in the Comics page's **…** menu as **Set up / repair comics**.
 
 ## Using it
 
@@ -56,6 +57,10 @@ pages) or **Mark as webtoon** (scroll). **Not a comic** undoes it and returns
 the gallery to Galleries. To mark many at once, select them on the Galleries
 page and bulk-edit the `Comic` tag onto them. The plugin tags their pages
 automatically.
+
+Unmarking a `.cbz`, by the button or by removing its tag, is remembered: the
+gallery gets a `not_comic` custom field, and nothing marks it again. Mark it as
+a comic to clear that.
 
 **Comics posted one page per post.** Comics → **New comic from images**:
 
@@ -119,6 +124,7 @@ rest of each filter is left as you set it.
 | Setting | |
 |---|---|
 | Comic Tag ID / Webtoon Tag ID / Comic Page Tag ID | Filled in automatically. Change them only to point the plugin at different tags. |
+| Show Comics in Galleries and Images | Off by default: comics leave those pages. The Hide/Show tasks switch it and apply it at once; if you change it here, run Set Up Comics. |
 | Webtoon Page Ratio | How tall a page must be, as a multiple of its width, before an untagged comic auto-opens as a scroll. Default 2. |
 
 ## Notes
@@ -126,10 +132,16 @@ rest of each filter is left as you set it.
 - **PDFs.** Stash can't read PDFs. Convert them to `.cbz` and put them in a
   library folder; Stash picks them up on the next scan and they arrive as
   comics.
-- **Fan Site Metadata Sync.** A Full Sync of that plugin replaces tag lists
-  unless *Keep Manual Performers & Tags* is on, which would remove the comic
-  tags. Turn that setting on until the sync plugin learns to keep comic tags.
-  Afterwards, **Set Up Comics** restores any page tags that were removed.
+- **Fan Site Metadata Sync** knows about these tags: its Full Sync keeps
+  `Comic` and every tag under it, so re-syncing your Patreon library never
+  un-marks a comic.
+- **Themes.** The plugin is built from Stash's own cards, toolbar, buttons,
+  toasts and image-viewer backdrop, so Stash themes and your Custom CSS apply
+  to it too.
+- **Adding pages with Stash's own gallery Add tab** (or "Remove from
+  gallery") doesn't notify plugins. The new pages are hidden from Images the
+  next time the comic or its gallery page is opened, or on **Set Up Comics**.
+  Moving images through image edit is picked up straight away.
 - The Comics tab and the gallery-page buttons are added to Stash's pages
   directly, because Stash v0.31 has no plugin hook for either spot. A future
   Stash release may need a small update to their placement.
