@@ -52,6 +52,8 @@ Currently there are two plugins (the Patreon one is being retired — see
 ```
 build_site.sh                       Template build script: plugins/ -> _site/<branch>/{index.yml, <id>.zip}
 .github/workflows/deploy.yml         Builds the source and deploys to GitHub Pages on push to plugins/**
+docs/stash-platform.md               What STASH offers an extension author, and how to verify it
+tests/                               Stdlib test scripts + run.py (outside plugins/ so they aren't packaged)
 plugins/
   of-stash-sync/                     (id kept for settings continuity; serves all sites)
     of-stash-sync.yml                Plugin manifest (settings, tasks, exec entry point)
@@ -156,7 +158,9 @@ manifest). At runtime:
   error level and marks the task failed). `main()` returns the error string;
   keep that contract when adding new fatal-exit paths.
 
-The five tasks are defined in the manifest and selected by `args.mode`. Each
+The manifest's tasks (15 of them, over 17 settings) are selected by `args.mode`,
+crossed with the optional `args.site` scope and `args.dryRun` — which is why
+there are far more tasks than modes. Each
 covers **every configured site** — the per-site data paths are all scanned in one
 run, so there is no per-site task:
 
@@ -478,10 +482,32 @@ automatically and the next deploy publishes it. Follow the existing
 `interface: raw` + stdin-JSON / stderr-logging pattern unless the plugin type
 calls for something else.
 
+**Read `docs/stash-platform.md` first if the new plugin isn't another
+`interface: raw` task plugin.** It covers what Stash actually offers — the three
+plugin interfaces (`raw` / `rpc` / `js`), hooks (all `.Post`, and no scan hook
+exists), what a scraper can and cannot do (and that a scraper isn't a plugin and
+isn't packaged by `build_site.sh`), gallery chapters, and how to verify any of
+it against the Stash source rather than from memory. Several of its entries are
+UI-only limits that reading the GraphQL schema will not reveal.
+
+Note `build_site.sh` globs `plugins/**/*.yml`, so **every** `.yml` under
+`plugins/` becomes a published plugin — don't put fixtures or config there.
+
 ## Conventions
 
 - Python: stdlib only, classes for clients/resolvers, `.format()` string
   formatting (as in existing code), docstrings explaining *why* (schema versions,
   edge cases) rather than restating the code.
-- There is no test suite or linter configured in this repo.
+- No linter is configured. There **are** tests: `python3 tests/run.py` (add a
+  substring to filter, e.g. `python3 tests/run.py patreon`). Stdlib only, one
+  process per file, each asserting its way to `ALL OK`; nothing talks to a
+  running Stash. They live at the repo root rather than beside the plugin
+  because `build_site.sh` runs `zip -r` over a plugin's whole directory, so
+  anything kept there ships to every user's install.
+- Most of them encode a bug that actually shipped — `embed/` holding real
+  media, the folder-gallery guard, path-not-basename matching, the dry-run
+  sentinel needing to look like an id. Adding a case with a fix is how that
+  reasoning survives; note that `test_patreon.py` once asserted the *wrong*
+  behaviour and so confirmed a bug instead of catching it, because it was
+  written from the same bad premise as the code.
 - Commit messages: short imperative subject lines (see `git log`).
