@@ -912,9 +912,16 @@ def build_cleanup_update(item, kind, source, username, tags):
         update["title"] = ""
     if item.get("organized"):
         update["organized"] = False
-    update["details"] = ""
-    update["date"] = None
-    update["code"] = ""
+    # Guarded like the fields above rather than cleared unconditionally. Every
+    # field sent is a field overwritten, and some of this media was re-curated
+    # by hand AFTER the bad sync -- a blind clear would wipe that repair. Only
+    # what actually holds a value is touched.
+    if item.get("details"):
+        update["details"] = ""
+    if item.get("date"):
+        update["date"] = None
+    if item.get("code"):
+        update["code"] = ""
 
     # Only the URLs pointing at this site; anything else on the media is not
     # ours and stays.
@@ -944,6 +951,12 @@ def build_cleanup_update(item, kind, source, username, tags):
     if item.get(credit):
         update[credit] = ""
 
+    # Nothing but the id means there is nothing of ours left on this media --
+    # already cleaned, or it only ever carried the studio that found it. Return
+    # None so the caller skips it entirely rather than sending a write that
+    # changes nothing.
+    if len(update) == 1:
+        return None
     return update
 
 
@@ -983,6 +996,8 @@ def cleanup_stray_media(client, configured, tags, workers, totals):
                 studio_name = ((item.get("studio") or {}).get("name") or "")
                 username = studio_name.split(" (")[0]
                 update = build_cleanup_update(item, kind, source, username, tags)
+                if update is None:
+                    continue
                 paths = _media_paths(item)
                 log.LogInfo("  Stray {} {}: {}".format(
                     kind, item["id"], paths[0] if paths else "(no path)"))

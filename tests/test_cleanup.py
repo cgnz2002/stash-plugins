@@ -52,6 +52,9 @@ STRAY = {
     "urls": ["https://www.patreon.com/Mirenac/posts/priest-123",
              "https://example.com/mine"],
     "photographer": "",
+    "details": "A post body the plugin wrote",
+    "date": "2025-11-05",
+    "code": "123456",
     "studio": {"id": "s1", "name": "Mirenac (Patreon)"},
     "performers": [{"id": "p1", "name": "Mirenac"},
                    {"id": "p2", "name": "Someone I Added"}],
@@ -82,12 +85,45 @@ su = sync.build_cleanup_update(scene_stray, "scene", P, "Mirenac", None)
 assert su["director"] == "", su
 assert "photographer" not in su, su
 
-# media carrying nothing of ours loses nothing it owns
+# media carrying nothing of ours is skipped outright (see the no-op case below)
 clean = {"id": "x", "title": "", "organized": False, "urls": [],
+         "details": "", "date": None, "code": "",
          "studio": None, "performers": [], "tags": [], "visual_files": []}
-u2 = sync.build_cleanup_update(clean, "image", P, "Mirenac", None)
-assert "studio_id" not in u2 and "title" not in u2 and "organized" not in u2, u2
-assert "urls" not in u2 and "performer_ids" not in u2 and "tag_ids" not in u2, u2
+assert sync.build_cleanup_update(clean, "image", P, "Mirenac", None) is None
+
+
+# --- fields are cleared only when they hold something ------------------------
+# Every field sent is a field overwritten. Some of this media was re-curated by
+# hand AFTER the bad sync, and a blind clear would wipe that repair.
+partial = dict(STRAY, id="img3", details="", date=None, code="",
+               title="", organized=False, photographer="")
+u3 = sync.build_cleanup_update(partial, "image", P, "Mirenac", None)
+for absent in ("details", "date", "code", "title", "organized", "photographer"):
+    assert absent not in u3, (absent, u3)
+# ...but what IS ours still goes
+assert u3["studio_id"] is None and u3["tag_ids"] == ["t3"], u3
+
+
+# --- media carrying nothing of ours is skipped entirely ----------------------
+# Returning an update with only an id would send a write that changes nothing.
+nothing = {"id": "img4", "title": "", "organized": False, "urls": [],
+           "details": "", "date": None, "code": "",
+           "studio": None, "performers": [], "tags": [], "visual_files": []}
+assert sync.build_cleanup_update(nothing, "image", P, "Mirenac", None) is None
+
+# a media whose only trace is the studio still gets cleaned
+studio_only = dict(nothing, id="img5", studio={"id": "s1", "name": "Mirenac (Patreon)"})
+u5 = sync.build_cleanup_update(studio_only, "image", P, "Mirenac", None)
+assert u5 == {"id": "img5", "studio_id": None}, u5
+
+
+# --- a MERGED item is spared when any file is inside a library ---------------
+# Stash merges byte-identical files into one scene, so a Patreon video and a
+# torrent copy of it become a single scene with two paths. That scene is
+# library media and must not be cleaned.
+assert sync.is_outside([TORRENT, INSIDE], ROOTS) is False
+assert sync.is_outside([INSIDE, TORRENT], ROOTS) is False
+assert sync.is_outside([TORRENT, TORRENT + ".dup"], ROOTS) is True
 
 
 # --- the pass only touches what is outside ----------------------------------

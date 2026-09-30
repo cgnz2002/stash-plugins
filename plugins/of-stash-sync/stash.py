@@ -174,7 +174,7 @@ class StashClient:
             query FindScenes($f: SceneFilterType!) {
                 findScenes(scene_filter: $f, filter: { per_page: -1 }) {
                     scenes {
-                        id title organized urls director
+                        id title organized urls director details date code
                         tags { id name } performers { id name }
                         studio { id name }
                         files { path }
@@ -188,7 +188,7 @@ class StashClient:
             query FindImages($f: ImageFilterType!) {
                 findImages(image_filter: $f, filter: { per_page: -1 }) {
                     images {
-                        id title organized urls photographer
+                        id title organized urls photographer details date code
                         tags { id name } performers { id name }
                         studio { id name }
                         visual_files {
