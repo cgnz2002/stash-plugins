@@ -46,14 +46,19 @@ The same task is in the Comics page's **…** menu as **Set up / repair comics**
 **Comics section.** Choose **Comics** in the navigation bar. Like Stash's own
 items, it can be shown or hidden under **Settings → Interface → Menu items**.
 It is switched on once when the plugin is installed; after that your choice
-stands. Comics are
-grouped by creator. You can search, filter to comics or webtoons, sort, and
-switch grouping off. A blue bar under a cover shows how far you have read in
-this browser.
+stands.
+
+The Comics page is Stash's own gallery list, so it works like every other
+list: search, the filter button, saved filters and **Set as default**, sort,
+per page, the **…** menu, zoom and selection. Its default filter is its own,
+separate from the Galleries page. Each comic shows as a portrait cover with
+its page count, a **Webtoon** badge where it applies and a **Read** (or
+**Continue**) button on hover. The bar under a cover shows how far you have
+read in this browser.
 
 **Performer and studio pages.** Performers and studios with comics get a
-**Comics** tab. A parent studio, such as your Patreon network studio, shows
-every comic of the studios under it.
+**Comics** tab, with the same list. A parent studio, such as your Patreon
+network studio, shows every comic of the studios under it.
 
 **Marking a gallery.** Open the gallery and use **Mark as comic** (side-by-side
 pages) or **Mark as webtoon** (scroll). **Not a comic** undoes it and returns
