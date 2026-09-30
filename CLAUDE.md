@@ -385,6 +385,18 @@ asks the profile what to open.
   identifies a post there — and the fallback covers it, the same degrading
   -capability pattern as `hashtags()`/`tier()`. A multi-file scene yields one
   `media_map` entry per file, so `seen_media` keeps it from being written twice.
+- **Skip Multi-file does not apply to Patreon**
+  (`SourceProfile.merged_files_are_duplicates`, True only there). The setting
+  exists for OnlyFans, where a merged scene is several *different* files from
+  different pages: no single post is the right source and overwriting is the
+  greater harm. patreon-dl gives the opposite case — the same image posted at
+  several tiers downloads byte-identical into each post folder and Stash merges
+  them on hash — so skipping would skip ordinary images and the merge protects
+  nothing. The flag is per-site rather than a setting because it states a fact
+  about the site, not a preference; it defaults to False so a new profile opts
+  in deliberately. `media_map` is iterated **sorted**, so such an item always
+  takes the lowest-sorting post's metadata instead of flipping between posts
+  across runs.
 - **Video has no folder of its own** — `.mp4` sits in `images/`, `attachments/`
   and `embed/` next to the pictures (85 and 65 in that same log), alongside
   `.psd`/`.zip`/`.pdf` Stash won't ingest. The media index is therefore

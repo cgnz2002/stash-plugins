@@ -1251,14 +1251,21 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
                 log.LogError("Could not resolve studio for {}; skipping".format(username))
                 return
 
-    # Map each Stash media file's basename to (kind, stash id, existing tag ids).
+    # Map each Stash media file's path to (kind, stash id, existing tag ids).
     # We route the update by where the media actually lives in Stash so the id
     # always matches the mutation (scenes -> sceneUpdate, images -> imageUpdate).
     # Tag-only and full passes look at organized media too.
     # The skip-multi-file guard protects merged scenes (multiple files from
     # different OF pages) from having their performers/metadata overwritten. It
-    # only applies to the destructive sync tasks, not the additive tag pass.
-    skip_multi = skip_multi_file and not tag_only
+    # only applies to the destructive sync tasks, not the additive tag pass, and
+    # not to sites whose merged media are byte-identical duplicates rather than
+    # different files -- see SourceProfile.merged_files_are_duplicates.
+    skip_multi = (skip_multi_file and not tag_only
+                  and not source.merged_files_are_duplicates)
+    if skip_multi_file and not tag_only and source.merged_files_are_duplicates:
+        log.LogDebug(
+            "  Skip Multi-file does not apply to {}: its merged media are "
+            "identical duplicates, so they are synced".format(source.label))
 
     include_all = full_sync or tag_only or crew_only
     # Fetch the creator's media once (organized included) and reuse it for the
@@ -1317,7 +1324,10 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
     # files span two posts would be written twice, the second update silently
     # undoing the first.
     seen_media = set()
-    for path, (kind, stash_id, existing_tags, existing_perf, existing_credit) in media_map.items():
+    # Sorted so a merged media spanning two posts always takes the same one
+    # (the lowest path) instead of whichever the dict happened to yield first --
+    # otherwise re-runs could flip such an item between two posts' metadata.
+    for path, (kind, stash_id, existing_tags, existing_perf, existing_credit) in sorted(media_map.items()):
         basename = os.path.basename(path)
         # Path first, basename second. The two are equivalent for OF-Scraper and
         # jff-scraper, whose filenames are media ids; on Patreon the same

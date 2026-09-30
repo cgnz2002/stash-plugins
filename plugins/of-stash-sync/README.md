@@ -156,7 +156,7 @@ Both current and older OF-Scraper database layouts are supported.
 | Keep Manual Performers & Tags | off | Sync is **non-destructive** to performers and tags: it **merges** them instead of replacing, so anything you added by hand survives a Full Sync (or the per-performer button), while the post's creator/@mentions and tags are added alongside. Everything else (title, details, date, studio, URL) is still updated. Crew are still moved out of the performers list on scenes/images. Turn this on if you manually curate performers/tags. |
 | Sync Workers | `2` | How many scene/image/gallery writes to send to Stash at once. Stash is SQLite-backed and SQLite has a **single writer**, so parallel writes queue on the DB write lock rather than truly committing at once; a little concurrency hides latency but too much piles up transactions until they time out (and starves the rest of Stash). Writes retry automatically on transient "database is locked" / "FOREIGN KEY constraint" / "timed out" contention. **If you see those errors on a big Full Sync, lower this** — `1` (fully sequential) is safest. Range 1–16. |
 | Auto-tag From Post Text | off | Scan each post's text and attach any existing Stash tags whose name or alias appears in it. |
-| Skip Multi-file Scenes and Images | off | Sync and Full Sync skip any scene or image with more than one file (e.g. merged scenes), to protect their performers and metadata. Does not affect the Tag task. |
+| Skip Multi-file Scenes and Images | off | Sync and Full Sync skip any scene or image with more than one file (e.g. merged scenes), to protect their performers and metadata. Does not affect the Tag task. **Does not apply to Patreon** — see below. |
 | Title Exclusions | (empty) | Phrases/regexes stripped from generated **titles** only (the description keeps the original post text). Best edited via **Settings → Tools → "Fan Site Sync: Title Exclusions"** (a list editor like Stash's scan Exclusions). See below. |
 | Crew Tag ID | (empty) | The Stash tag **ID** (from the tag's URL, e.g. `.../tags/42` → `42`) marking crew performers. A performer with this tag has their name put in each scene's Director field and each image's Photographer field instead of the performers list. Applies to the creator and any collaborator credited by `@mention` or profile URL (`onlyfans.com/username`). Empty disables crew handling. |
 | Sponsor Tag ID | (empty) | The Stash tag **ID** marking **sponsor** performers (brands/advertisers). A performer with this tag is **removed** from the performers list and the scene/image/gallery is tagged `sponsored` instead — Stash has no field to credit a sponsor in. Unlike crew, sponsors are dropped from galleries too. Applies to the creator and any collaborator credited by `@mention` or profile URL. Empty disables sponsor handling. See below. |
@@ -276,6 +276,25 @@ Patreon works differently from the other two and it's worth knowing how:
   images and linking every member post's scenes. Keyed by collection URL, so
   renaming a collection on Patreon updates the gallery instead of making a
   second one.
+
+#### Duplicates across tiers, and Skip Multi-file
+
+A creator who posts the same image at several tiers ends up with a
+byte-identical copy in each post's folder, and Stash merges identical files into
+one image or scene automatically. That makes a large share of a Patreon library
+"multi-file" through no fault of its own.
+
+So **Skip Multi-file Scenes and Images does not apply to Patreon.** That setting
+exists for OnlyFans, where a merged scene is several *different* files gathered
+from different pages — there is no single right post to take metadata from, and
+overwriting is the greater harm. A Patreon merge is the opposite: the files are
+the same file, and the merge carries nothing worth protecting. Skipping them
+would skip ordinary images whose only sin is being posted twice.
+
+Such an item takes the metadata of the **lowest-sorting post folder** it appears
+in, chosen deterministically so re-runs don't flip it between posts. When the
+same image spans two posts there is no more correct answer available — the file
+genuinely belongs to both.
 
 #### Auxiliary folders (important)
 
