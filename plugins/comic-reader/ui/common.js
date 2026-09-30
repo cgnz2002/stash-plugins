@@ -330,6 +330,26 @@
       "Something went wrong: " + (e && e.message ? e.message : String(e)));
   };
 
+  // Everything this plugin renders inside Stash's own tree (nav item, page
+  // injector, route) sits in one of these: if our code throws, only our piece
+  // disappears. Without it, an error in the nav bar blanks all of Stash --
+  // which is exactly what happened in 0.1.0. ES5 class, no JSX.
+  function Boundary(props) {
+    React.Component.call(this, props);
+    this.state = { failed: false };
+  }
+  Boundary.prototype = Object.create(React.Component.prototype);
+  Boundary.prototype.constructor = Boundary;
+  Boundary.getDerivedStateFromError = function () { return { failed: true }; };
+  Boundary.prototype.componentDidCatch = function (error) {
+    console.error("[comic-reader] " + (this.props.name || "component") +
+      " failed and was hidden so the rest of Stash keeps working:", error);
+  };
+  Boundary.prototype.render = function () {
+    return this.state.failed ? (this.props.fallback || null) : this.props.children;
+  };
+  CR.Boundary = Boundary;
+
   CR.readerPath = function (galleryId) { return CR.ROUTE + "/read/" + galleryId; };
 
   // Per-viewer conveniences only (last page, spread preference). Storage can

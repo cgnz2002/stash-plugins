@@ -51,16 +51,6 @@
 .cr-tab-pane {
   padding-top: 1rem;
 }
-/* While the Comics tab is showing, Stash still marks its own active tab;
-   draw that one like an inactive tab so only Comics looks selected. */
-.cr-comics-active .nav-link.active:not(.cr-tab) {
-  color: inherit;
-  background-color: transparent;
-  border-color: transparent;
-}
-.cr-comics-active .nav-link.active:not(.cr-tab)::after {
-  display: none;
-}
 .cr-tab {
   cursor: pointer;
 }

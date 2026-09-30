@@ -132,6 +132,24 @@ comic-reader:
 
 Found by reading the shipped bundle (`/assets/*.js`), not the docs:
 
+- **How patches chain** (`RB` / `nMt` in the v0.31 bundle): every `before`
+  runs first, and its return value *replaces* the argument list; then the
+  `instead` handlers run as a chain, each called with those arguments plus
+  `next` appended; then each `after` gets the arguments plus the result.
+  React calls a function component with **two** arguments, and some plugins
+  (Stash TV) read `next` positionally as the third. So a `before` must return
+  every argument it was given, `[props, ...rest]`, never `[props]` -- the
+  latter blanks the app for anyone running such a plugin (React #130).
+  Keep `children` an array for the next patch, and never throw out of a
+  patch.
+- **Nav items the way Stash TV and Binge do it:** patch `CheckboxGroup` for
+  `groupId === "menu-items"` to add `{id, headingID}` to its `items` (that
+  is the Settings > Interface > Menu items list), and show the nav item only
+  when `configuration.interface.menuItems` contains that id. The list is null
+  until the user first edits it, which means "Stash's defaults".
+- A component can be rendered and then **discarded** by React (e.g. while a
+  lazy chunk loads on first page load), so never record anything global
+  during render; do it in an effect.
 - `MainNavBar.MenuItems` is rendered **once** and sits inside the router --
   a good home for a nav item and for any always-mounted helper component.
   `MainNavBar.UtilityItems` is rendered **twice** (desktop and mobile), so

@@ -281,7 +281,7 @@ assert.strictEqual(be.onHook({ type: "Image.Create.Post", id: 5 }), "already tag
 assert.ok(!calls.some((q) => q.indexOf("mutation") >= 0));
 
 // ---- UI, with a bare window ------------------------------------------------
-const win = { PluginApi: { React: { createElement() {}, useState() {} }, libraries: {}, components: {} } };
+const win = { PluginApi: { React: { createElement() {}, useState() {}, Component: function Component() {} }, libraries: {}, components: {} } };
 win.window = win;
 win.Intl = Intl;
 vm.createContext(win);
@@ -319,6 +319,75 @@ assert.strictEqual(CR.suggestTitle([{ title: "" }]), "");
 assert.strictEqual(CR.galleryTitle({ id: 1, title: "", files: [{ path: "/lib/Space Pals - Issue 1.cbz" }] }), "Space Pals - Issue 1");
 assert.strictEqual(CR.galleryTitle({ id: 2, title: "Named" }), "Named");
 assert.strictEqual(CR.galleryTitle({ id: 3, title: "", files: [], folder: { path: "/lib/Folder Comic" } }), "Folder Comic");
+
+// ---- nav patches vs Stash's patch chain -----------------------------------
+// Stash (RB / nMt in the v0.31 bundle): each `before` REPLACES the argument
+// list with what it returns; each `instead` gets those arguments plus `next`.
+// React calls a component with two arguments, and Stash TV's MenuItems patch
+// reads `next` as its THIRD. 0.1.0's before returned [props] alone, so Stash
+// TV got undefined as a component: React error #130, a blank Stash.
+const patches = { before: {}, instead: {}, after: {} };
+const reg = (kind) => (name, fn) => { (patches[kind][name] = patches[kind][name] || []).push(fn); };
+const R = {
+  createElement(type, props, ...kids) {
+    const p = Object.assign({}, props || {});
+    if (kids.length) p.children = kids.length === 1 ? kids[0] : kids;
+    return { type, props: p, key: p.key };
+  },
+  Fragment: "Fragment",
+  Children: { toArray(c) { const out = []; (function walk(x) { if (x == null || x === false) return; if (Array.isArray(x)) x.forEach(walk); else out.push(x); })(c); return out; } },
+  Component: function Component() {},
+  useState() { return [null, () => {}]; }, useEffect() {}, useRef() { return { current: null }; },
+  useMemo(f) { return f(); }, useCallback(f) { return f; },
+};
+const ui = {
+  PluginApi: { React: R, ReactDOM: {}, libraries: {}, components: {}, hooks: {}, GQL: {},
+               register: { route() {} },
+               patch: { before: reg("before"), instead: reg("instead"), after: reg("after") } },
+  // seedMenuItem() runs at load; answer "no custom menu list" so it does nothing
+  fetch: () => Promise.resolve({ json: () => ({ data: { configuration: { interface: { menuItems: null }, plugins: {} } } }) }),
+  Promise, Intl, console,
+};
+ui.window = ui;
+vm.createContext(ui);
+for (const p of ["ui/common.js", "ui/reader.js", "ui/library.js", "ui/builder.js", "ui/inject.js", "ui/main.js"]) vm.runInContext(read(p), ui);
+
+function stashCall(name, target, args) {           // RB, as shipped
+  for (const b of patches.before[name] || []) args = b.apply(null, args);
+  const ins = patches.instead[name] || [];
+  return { args, out: ins.length ? ins[0].apply(null, args.concat([target])) : target.apply(null, args) };
+}
+const CTX = { legacyContext: true };
+const itemA = R.createElement("div", { key: "a" }), itemB = R.createElement("div", { key: "b" });
+// Stash TV's patch, as shipped: instead("MainNavBar.MenuItems", function({children, ...t}, n, r) {...})
+patches.instead["MainNavBar.MenuItems"] = [function (props, n, r) {
+  assert.strictEqual(typeof r, "function", "Stash TV's `next` (3rd argument) must still be the component");
+  return r(props, n);
+}];
+const menu = (props) => props.children;
+const res = stashCall("MainNavBar.MenuItems", menu, [{ children: [itemA, itemB], other: 1 }, CTX]);
+assert.strictEqual(res.args.length, 2, "a before patch must return every argument");
+assert.strictEqual(res.args[1], CTX);
+assert.strictEqual(res.args[0].other, 1, "other props survive");
+assert.ok(Array.isArray(res.args[0].children), "children stay an array for the next patch");
+assert.strictEqual(res.args[0].children.length, 4, "Stash's items plus the Comics item and the injector");
+assert.ok(res.args[0].children.slice(2).every((c) => c.type === ui.ComicReader.Boundary), "ours sit in error boundaries");
+
+// a transform that throws leaves the arguments exactly as they came
+const orig = [{ a: 1 }, CTX];
+const kept = ui.ComicReader.keepArgs("t", () => { throw new Error("boom"); }).apply(null, orig);
+assert.strictEqual(kept.length, 2); assert.strictEqual(kept[0], orig[0]); assert.strictEqual(kept[1], CTX);
+
+// Settings > Interface > Menu items gets one Comics row; other groups untouched
+const cg = patches.before["CheckboxGroup"];
+assert.ok(cg && cg.length === 1, "CheckboxGroup patch registered");
+let g = cg[0]({ groupId: "menu-items", items: [{ id: "scenes" }] }, CTX);
+assert.strictEqual(g.length, 2); assert.strictEqual(g[1], CTX);
+eq(g[0].items.map((i) => i.id), ["scenes", "comics"]);
+g = cg[0](g[0], CTX);
+eq(g[0].items.map((i) => i.id), ["scenes", "comics"], "never added twice");
+const other = { groupId: "something-else", items: [{ id: "x" }] };
+assert.strictEqual(cg[0](other, CTX)[0], other);
 
 console.log("JS OK");
 """

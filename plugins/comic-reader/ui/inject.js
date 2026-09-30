@@ -118,9 +118,31 @@
     }, [nav, els]);
 
     var on = active[0] && count[0] > 0;
+    // Stash's tab that was selected when Comics took over. Its "active" class
+    // is taken off while Comics shows and put back afterwards: overriding its
+    // look with CSS lost to themes that style the selected tab more strongly,
+    // leaving two tabs lit. React only rewrites a tab's class when its own
+    // props change, so the class stays off until Stash selects another tab.
+    var stockActive = React.useRef(null);
     React.useEffect(function () {
       if (!nav || !els) return;
       var content = nav.parentElement.querySelector(":scope > .tab-content");
+      if (on) {
+        var cur = nav.querySelector(".nav-link.active:not(.cr-tab)");
+        if (cur) {
+          stockActive.current = cur;
+          cur.classList.remove("active");
+          cur.setAttribute("aria-selected", "false");
+        }
+      } else if (stockActive.current) {
+        var prev = stockActive.current;
+        stockActive.current = null;
+        // Put it back unless Stash has since selected another tab itself.
+        if (document.contains(prev) && !nav.querySelector(".nav-link.active:not(.cr-tab)")) {
+          prev.classList.add("active");
+          prev.setAttribute("aria-selected", "true");
+        }
+      }
       nav.classList.toggle("cr-comics-active", on);
       els.link.classList.toggle("active", on);
       els.link.setAttribute("aria-selected", on ? "true" : "false");
@@ -235,30 +257,43 @@
   // --------------------------------------------------------------- root
 
   // Only one injector may be live: if Stash ever mounts the host twice, a
-  // second copy would add a second tab and a second row of buttons. The
-  // first instance to render claims it; the claim passes on at unmount.
+  // second copy would add a second tab and a second row of buttons.
+  //
+  // The claim is made in an effect, i.e. only once React has actually put
+  // this instance on the page. Claiming during render (0.1.0) broke on a
+  // browser's first load: React can render a component and then throw that
+  // render away while lazy chunks load, and the discarded render kept the
+  // claim forever, so no injector ever ran and the gallery buttons and
+  // Comics tab never appeared.
   var owner = null;
   var waiting = [];
 
   function Injector() {
     var me = React.useRef({});
-    var rerender = React.useState(0)[1];
-    if (owner === null) owner = me.current;
+    var mine = React.useState(false);
     React.useEffect(function () {
-      var poke = function () { rerender(function (n) { return n + 1; }); };
-      waiting.push(poke);
+      function claim() {
+        if (owner !== null && owner !== me.current) return false;
+        owner = me.current;
+        mine[1](true);
+        return true;
+      }
+      if (!claim()) waiting.push(claim);
       return function () {
-        waiting = waiting.filter(function (p) { return p !== poke; });
+        waiting = waiting.filter(function (c) { return c !== claim; });
         if (owner === me.current) {
           owner = null;
-          waiting.forEach(function (p) { p(); });
+          // Hand over to the next mounted instance, if any.
+          for (var i = 0; i < waiting.length; i++) {
+            if (waiting[i]()) { waiting.splice(i, 1); break; }
+          }
         }
       };
     }, []);
 
     var loc = CR.Router.useLocation ? CR.Router.useLocation() : window.location;
     var history = CR.Router.useHistory ? CR.Router.useHistory() : null;
-    if (owner !== me.current) return null;
+    if (!mine[0]) return null;
     var ctx = pageContext(loc.pathname);
     if (!ctx) return null;
     if (ctx.kind === "gallery") return h(GalleryActions, { key: "g" + ctx.id, ctx: ctx, history: history });
