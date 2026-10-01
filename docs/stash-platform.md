@@ -138,6 +138,25 @@ repo is plugins.
   is no gallery→group relation, so "a gallery of galleries" is impossible.
   Groups take scenes only.
 - **Galleries carry `scene_ids`**, which is how a gallery covers video at all.
+  A scene or image can also be detached from a gallery via its own update:
+  both `SceneUpdateInput` and `ImageUpdateInput` take `gallery_ids`, so
+  membership is settable from either side.
+- **`.nogallery` / `.forcegallery` are per-directory, NOT recursive.** They
+  override the global *Create galleries from folders* setting one folder at a
+  time, and the file must be lower case. `ScanHandler.getOrCreateGallery`
+  (`pkg/image/scan.go`) stats them in `filepath.Dir(f.Base().Path)` — the
+  **immediate parent of each image file**, with no walk up the tree. So
+  exempting a library means a file in every directory that *directly* contains
+  images (`find <root> -type d -exec touch {}/.nogallery \;`), not one at the
+  root. They are consulted at scan time only: neither file removes a folder
+  gallery that already exists.
+- **`galleryDestroy` with `delete_file: false` destroys no images.**
+  `gallery.Service.Destroy` (`pkg/gallery/delete.go`) only cascades to images
+  for a **zip-based** gallery, or for a folder-based one *when `deleteFile` is
+  set*. A created (non-zip, non-folder) gallery — which is what a plugin makes
+  — is just a record, so dropping it is metadata-only and the images stay in
+  the library. Both flags default to false (`utils.IsTrue(input.DeleteFile)`
+  on a nil pointer).
 
 ### Chapters
 
