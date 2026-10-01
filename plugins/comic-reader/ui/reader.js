@@ -355,9 +355,20 @@
     }, []);
 
     var d = data.data;
-    var pages = d ? d.pages : [];
     var gallery = d ? d.gallery : null;
     var tags = d ? d.tags : null;
+    // The comic's own page order (path by default; see CR.orderOf), or the
+    // one just chosen in the page overview.
+    var orderNow = React.useState(null);
+    var order = orderNow[0] || (gallery ? CR.orderOf(gallery) : { mode: "path", ids: [] });
+    var rawPages = d ? d.pages : null;
+    var pages = React.useMemo(function () {
+      return rawPages ? CR.sortPages(rawPages, order) : [];
+    }, [rawPages, order.mode, order.ids.join(",")]);
+    var overview = React.useState(false);
+    // Bumped to make the scroll strip jump: it scrolls to its start page only
+    // when it mounts.
+    var jump = React.useState(0);
 
     // `gallery` is null for a deleted gallery or a stale bookmark; that must
     // reach the "not found" message below rather than throw here.
@@ -502,10 +513,15 @@
         // Alt+Left is the browser's Back, Ctrl+F is find: not page turns.
         if (e.ctrlKey || e.metaKey || e.altKey) return;
         if (e.key === "Escape") {
-          // An open sheet closes first; the docked panel is part of the page.
-          if (!docked && infoOpen) toggleInfo(); else exit();
+          // What sits over the page closes first: the page overview, then a
+          // details sheet. The docked panel is part of the page.
+          if (overview[0]) overview[1](false);
+          else if (!docked && infoOpen) toggleInfo();
+          else exit();
           return;
         }
+        if (e.key === "g") { overview[1](function (v) { return !v; }); return; }
+        if (overview[0]) return; // its own buttons; no page turns underneath
         if (e.key === "f") { toggleFullscreen(); return; }
         if (e.key === "i") { toggleInfo(); return; }
         if (layout !== "pages") return; // the scroll strip scrolls natively
@@ -523,7 +539,7 @@
       }
       window.addEventListener("keydown", onKey);
       return function () { window.removeEventListener("keydown", onKey); };
-    }, [go, layout, exit, docked, infoOpen, toggleInfo]);
+    }, [go, layout, exit, docked, infoOpen, toggleInfo, overview[0]]);
 
     function toggleFullscreen() {
       var el = rootRef.current;
@@ -626,6 +642,10 @@
         h("button", { type: "button", className: "btn btn-secondary btn-sm" + (infoOpen ? " active" : ""),
                       title: infoOpen ? "Hide details (I)" : "Details (I)", "aria-pressed": infoOpen,
                       onClick: toggleInfo }, h(CR.Icon, { name: "faCircleInfo" })),
+        h("button", { type: "button", className: "btn btn-secondary btn-sm" + (overview[0] ? " active" : ""),
+                      title: "Pages: jump to one, or fix the order (G)", "aria-pressed": overview[0],
+                      onClick: function () { overview[1](function (v) { return !v; }); } },
+          h(CR.Icon, { name: "faTableCells" })),
         h("button", { type: "button", className: "btn btn-secondary btn-sm", title: "Full screen (F)",
                       onClick: toggleFullscreen }, h(CR.Icon, { name: "faExpand" })),
         h("a", { className: "btn btn-secondary btn-sm", title: "Open the gallery in Stash",
@@ -648,6 +668,35 @@
     // Only a real mouse wakes the toolbars on movement: Android sends a
     // synthetic mousemove before every tap, which would show the bars just as
     // the tap's own toggle hides them again.
+    // The page overview: jump to a page, or change the comic's order -- the
+    // page on screen stays on screen when the order changes.
+    function goToPage(i) {
+      pos[1](Math.max(0, Math.min(pages.length - 1, i)));
+      jump[1](function (n) { return n + 1; });
+    }
+    function changeOrder(mode, ids) {
+      var onScreen = pages[page] ? pages[page].id : null;
+      return CR.saveOrder(galleryId, mode, ids).then(function () {
+        var next = { mode: mode, ids: mode === "custom" ? ids : order.ids };
+        var cf = Object.assign({}, gallery.custom_fields || {});
+        if (mode === "path") delete cf.comic_order; else cf.comic_order = mode;
+        if (mode === "custom") cf.comic_page_order = ids.join(",");
+        gallery.custom_fields = cf;
+        orderNow[1](next);
+        var at = CR.sortPages(rawPages, next).map(function (p) { return p.id; }).indexOf(onScreen);
+        goToPage(at >= 0 ? at : 0);
+      });
+    }
+    var overviewEl = overview[0] && CR.Overview
+      ? h(CR.Boundary, { name: "page overview" },
+          h(CR.Overview, {
+            pages: pages, current: inViewIdx.length ? inViewIdx : [page], order: order,
+            onJump: function (i) { goToPage(i); overview[1](false); },
+            onClose: function () { overview[1](false); },
+            onOrder: changeOrder,
+          }))
+      : null;
+
     var info = null;
     if (infoOpen && CR.ComicInfo) {
       info = h(CR.Boundary, { name: "comic details" },
@@ -666,7 +715,7 @@
       layout === "pages"
         ? h(PagesView, { pages: pages, spreads: spreads, spreadIndex: spreadIndex, go: go, goTo: goTo,
                          chrome: chrome, title: title, onExit: exit, series: series, onOpen: openComic, rating: rating })
-        : h(ScrollView, { key: "scroll-" + galleryId, pages: pages, width: stripWidth[0],
+        : h(ScrollView, { key: "scroll-" + galleryId + "-" + jump[0], pages: pages, width: stripWidth[0],
                           startPage: page, chrome: chrome, title: title, onExit: exit,
                           series: series, onOpen: openComic, rating: rating,
                           onPage: function (p, frac) {
@@ -677,7 +726,8 @@
                           } }),
       topBar,
       bottom,
-      info);
+      info,
+      overviewEl);
   }
 
   CR.Reader = Reader;

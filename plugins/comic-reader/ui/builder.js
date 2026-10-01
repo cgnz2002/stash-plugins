@@ -4,8 +4,9 @@
 // them together: those posts have no gallery of their own (a single-image
 // post doesn't get one), so the pages are loose images. Pick a creator, pick
 // the pages, and this makes a gallery tagged Comic or Webtoon. Reading order
-// is the reader's usual one (post date, then file name), so picking order
-// doesn't matter.
+// is the reader's usual one -- file path, and Patreon post folders start with
+// the post id, so pages from several posts read in release order -- and the
+// reader's page overview can change it, so picking order doesn't matter.
 //
 // Picking uses Stash's own image cards and selection checkboxes (GridCard in
 // selecting mode), so it behaves like selecting on the Images page,
@@ -254,7 +255,7 @@
         chosen.length
           ? h("div", { className: "cr-order-wrap" },
               h("div", { className: "cr-order-head text-muted" },
-                h("span", null, "Reading order (by post date)"),
+                h("span", null, "Reading order (by file path)"),
                 h("button", { type: "button", className: "btn btn-link btn-sm", onClick: function () { selected[1]({}); } }, "Clear")),
               h("ol", { className: "cr-order" }, chosen.map(function (img) {
                 return h("li", { key: img.id },
@@ -273,8 +274,9 @@
           h(CR.Icon, { name: "faChevronLeft" }), " Comics"),
         h("h4", { className: "m-0" }, "New comic from images")),
       h("p", { className: "text-muted" },
-        "For comics posted one page per post. Pick the pages; they're put in post-date order, " +
-        "and the new comic is hidden from Galleries and its pages from Images."),
+        "For comics posted one page per post. Pick the pages; they're read in file order (release order " +
+        "for Patreon posts), which the reader's Pages view can change. The new comic is hidden from " +
+        "Galleries and its pages from Images."),
       h("div", { className: "cr-builder" }, picker, panel));
   }
 

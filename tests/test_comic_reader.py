@@ -294,7 +294,7 @@ const win = { PluginApi: { React: { createElement() {}, useState() {}, Component
 win.window = win;
 win.Intl = Intl;
 vm.createContext(win);
-for (const p of ["ui/common.js", "ui/info.js", "ui/reader.js", "ui/series.js", "ui/builder.js"]) vm.runInContext(read(p), win);
+for (const p of ["ui/common.js", "ui/info.js", "ui/overview.js", "ui/reader.js", "ui/series.js", "ui/builder.js"]) vm.runInContext(read(p), win);
 const CR = win.ComicReader;
 
 const P = (w, h) => ({ width: w, height: h });
@@ -311,8 +311,45 @@ eq(CR.buildSpreads([], true), []);
 const img = (id, date, path) => ({ id, date, visual_files: [{ path }] });
 const order = CR.sortPages([img("a", null, "/c.cbz/page10.png"), img("b", null, "/c.cbz/page2.png"), img("c", null, "/c.cbz/page1.png")]);
 eq(order.map((i) => i.id), ["c", "b", "a"], "natural order: page2 before page10");
-const posts = CR.sortPages([img("p3", "2026-01-03", "/x/1"), img("p1", "2026-01-01", "/x/9"), img("p2", "2026-01-02", "/x/5")]);
-eq(posts.map((i) => i.id), ["p1", "p2", "p3"], "post date decides before path");
+// The default is the file path, not the date: a comic shared in one post
+// gives every page the same date, and file order is the creator's order.
+// Patreon post folders start with the post id, so several posts still read
+// in release order -- naturally (post 99 before post 100).
+const pat = (id, date, post, file) => img(id, date, "/patreon/Artist/posts/" + post + "/images/" + file);
+eq(CR.sortPages([pat("b2", "2026-01-02", "100 - Ch 2", "1.png"), pat("a10", "2026-01-01", "99 - Ch 1", "10.png"),
+                 pat("a2", "2026-01-01", "99 - Ch 1", "2.png"), pat("a1", "2026-01-01", "99 - Ch 1", "1.png")])
+   .map((i) => i.id), ["a1", "a2", "a10", "b2"]);
+// path is the default even when dates disagree with it
+const posts = [img("p3", "2026-01-03", "/x/1"), img("p1", "2026-01-01", "/x/9"), img("p2", "2026-01-02", "/x/5")];
+eq(CR.sortPages(posts).map((i) => i.id), ["p3", "p2", "p1"]);
+// "date": post date, then path; an undated page goes last, not first
+eq(CR.sortPages(posts, { mode: "date", ids: [] }).map((i) => i.id), ["p1", "p2", "p3"]);
+eq(CR.sortPages(posts.concat([img("u", null, "/x/0")]), { mode: "date", ids: [] }).map((i) => i.id), ["p1", "p2", "p3", "u"]);
+// "custom": the saved ids first, in that order; pages added since follow in path order
+eq(CR.sortPages(posts.concat([img("new", null, "/x/0")]), { mode: "custom", ids: ["p2", "gone", "p3", "p1"] })
+   .map((i) => i.id), ["p2", "p3", "p1", "new"]);
+// reader page objects carry the path directly
+eq(CR.sortPages([{ id: "b", path: "/c/2.png" }, { id: "a", path: "/c/10.png" }]).map((i) => i.id), ["b", "a"]);
+
+// The order saved on a gallery: custom fields can't hold lists, so ids are
+// comma-separated; "custom" without ids falls back to path.
+eq(CR.orderOf({ custom_fields: {} }), { mode: "path", ids: [] });
+eq(CR.orderOf({ custom_fields: { comic_order: "date" } }).mode, "date");
+eq(CR.orderOf({ custom_fields: { comic_order: "custom", comic_page_order: "3,1,2" } }), { mode: "custom", ids: ["3", "1", "2"] });
+eq(CR.orderOf({ custom_fields: { comic_order: "custom" } }).mode, "path");
+eq(CR.orderOf({ custom_fields: { comic_order: "date", comic_page_order: "3,1" } }), { mode: "date", ids: ["3", "1"] }, "kept for switching back");
+// The overview labels pages by file name, plus the folder when a comic spans
+// several: the sync titles every image of a post alike and every post has a
+// 1.jpg, so the post folder is what tells pages apart.
+eq(CR.pageFolder("/p/Artist/posts/100002 - Ch 1 Page 2/images/1.png"), "100002 - Ch 1 Page 2", "skips images/");
+eq(CR.pageFolder("C:\\lib\\comics\\Space Pals.cbz\\page01.png"), "Space Pals.cbz");
+eq(CR.pageFolder("page.png"), "");
+assert.ok(CR.manyFolders([{ path: "/p/posts/1 - A/images/1.png" }, { path: "/p/posts/2 - B/images/1.png" }]));
+assert.ok(!CR.manyFolders([{ path: "/c/x.cbz/1.png" }, { path: "/c/x.cbz/2.png" }]));
+assert.ok(!CR.manyFolders([]));
+eq(CR.movePage(["a", "b", "c", "d"], 3, 0), ["d", "a", "b", "c"]);
+eq(CR.movePage(["a", "b", "c", "d"], 0, 2), ["b", "c", "a", "d"]);
+eq(CR.movePage(["a", "b"], 1, 9), ["a", "b"]);
 
 const strip = { width: 720, height: 3200 };
 assert.ok(CR.looksLikeWebtoon([strip, strip, strip], 2));
@@ -357,6 +394,15 @@ eq(cfOf(1).partial.comic_finished, true);
 eq(cfOf(1).remove, ["comic_hide_continue", "comic_page"]);
 assert.ok(!("comic_page" in cfOf(1).partial));
 eq(cfOf(2), { partial: { comic_hide_continue: true } });
+// Saving an order: custom writes both fields; date/path leave the custom list
+// in place so switching back to Custom loses nothing.
+sent.length = 0;
+CR.saveOrder("12", "custom", ["3", "1"]);
+CR.saveOrder("12", "date", ["3", "1"]);
+CR.saveOrder("12", "path", ["3", "1"]);
+eq(cfOf(0), { partial: { comic_order: "custom", comic_page_order: "3,1" } });
+eq(cfOf(1), { partial: { comic_order: "date" } });
+eq(cfOf(2), { remove: ["comic_order"] });
 
 // Series: release order is date, then title (naturally), undated last.
 const ep = (id, date, title) => ({ id, date, title, custom_fields: {} });
@@ -437,7 +483,7 @@ const ui = {
 };
 ui.window = ui;
 vm.createContext(ui);
-for (const p of ["ui/common.js", "ui/info.js", "ui/reader.js", "ui/library.js", "ui/series.js", "ui/builder.js", "ui/inject.js", "ui/main.js"]) vm.runInContext(read(p), ui);
+for (const p of ["ui/common.js", "ui/info.js", "ui/overview.js", "ui/reader.js", "ui/library.js", "ui/series.js", "ui/builder.js", "ui/inject.js", "ui/main.js"]) vm.runInContext(read(p), ui);
 
 function stashCall(name, target, args) {           // RB, as shipped
   for (const b of patches.before[name] || []) args = b.apply(null, args);

@@ -154,6 +154,108 @@
   margin: 0.5rem 0 0.75rem;
 }
 
+/* ---------------------------------------------------------- page overview */
+
+/* Over the whole reader, on the reader's own dark scrim. */
+.cr-overview {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  background: rgba(0, 0, 0, 0.96);
+  user-select: none;
+  -webkit-user-select: none;
+}
+.cr-overview-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  padding: 0.75rem 1rem;
+}
+.cr-overview-head h4 {
+  margin: 0;
+}
+.cr-overview-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1 1 auto;
+}
+.cr-overview-close {
+  margin-left: auto;
+}
+.cr-overview-hint {
+  margin: 0 1rem 0.5rem;
+  font-size: 0.85rem;
+}
+.cr-overview-grid {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 0.75rem;
+  padding: 0 1rem 1.5rem;
+  align-content: start;
+}
+@media (max-width: 576px) {
+  .cr-overview-grid {
+    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+    gap: 0.5rem;
+  }
+}
+.cr-thumb {
+  cursor: pointer;
+  border-radius: 0.25rem;
+  padding: 0.25rem;
+}
+.cr-thumb[draggable="true"] {
+  cursor: grab;
+}
+.cr-thumb.cr-current {
+  box-shadow: 0 0 0 2px var(--primary);
+}
+.cr-thumb img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  object-fit: cover;
+  object-position: top;
+  border-radius: 0.2rem;
+}
+.cr-thumb-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 0.35rem;
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  line-height: 1.3;
+}
+.cr-thumb-file {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.cr-thumb-folder {
+  flex-basis: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cr-thumb-move {
+  display: flex;
+  margin-top: 0.25rem;
+}
+.cr-thumb-move .btn {
+  flex: 1 1 0;
+}
+
 /* ------------------------------------------------------- details panel */
 
 /* Docked on the left like the details panel of Stash's gallery and scene
