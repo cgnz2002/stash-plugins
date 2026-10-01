@@ -135,6 +135,12 @@ class FakeClient:
     def find_media_under_studio(self, studio_id, kind):
         return self.media.get(kind, [])
 
+    def find_galleries_under_studio(self, studio_id):
+        return self.media.get("gallery", [])
+
+    def update_gallery(self, update):
+        self.updated.append(("gallery", update))
+
     def update_scene(self, update):
         self.updated.append(("scene", update))
 

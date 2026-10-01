@@ -41,6 +41,11 @@ class FakeDB:
     def medias_for_model(self, user_id):
         return self.rows
 
+    def post_for_path(self, path):
+        # A scraper database's answer. The real PatreonLibrary's is exercised
+        # in test_post_folders.py; here, the name/path matching is under test.
+        return None
+
 
 # --- the collision that caused it -------------------------------------------
 # Three posts each hold their own "1.jpg"; Stash has all three as separate

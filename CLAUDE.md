@@ -335,7 +335,20 @@ run, so there is no per-site task:
   all), and `build_folder_gallery_update` returns None when nothing would change
   so re-runs write nothing. The creator is matched by whole **path segment**, not
   substring, because Stash's `path` filter is a substring match and would
-  otherwise let `jake` claim `/data/jakeson/...`.
+  otherwise let `jake` claim `/data/jakeson/...`. **A whole segment is still
+  not confinement**: `/torrents/onlyfans/onlydurden/` passes it, and was
+  adopted like the user's own folder. So `gallery_outside_data_path` also
+  confines it to the site's data path — and the per-post and collection
+  `by_url` lookups too, since a folder gallery anywhere can carry a stamped
+  post URL. A plugin-made gallery has no path, so it is never "outside".
+  `mode: cleanup` reverts the ones already adopted: a folder/zip gallery
+  outside every data path counts as ours only if it carries the exact
+  `folder_gallery_title` (built from its own path and studio, not something a
+  person types) or a post URL on the site's domain (`plugin_adopted_gallery`).
+  The revert follows the evidence (`build_gallery_cleanup_update`): a title
+  fingerprint undoes only the five fields `sync_folder_galleries` sets, so the
+  gallery's own details/date survive; a URL fingerprint reverts like media.
+  A gallery photographer is never cleared — the plugin never writes one.
 - **Media queries are confined to the site's data path**
   (`media_under_data_path`). Stash's `path` filter is a plain **substring**
   match over the **whole library**, and `find_scenes`/`find_images` pass only
@@ -526,6 +539,32 @@ asks the profile what to open.
   their own call site in `sync_collection_galleries` — they don't route through
   `SourceProfile.title()`, so adding a title path means checking it reaches
   there as well.
+- **Post galleries are Stash's folder/zip galleries, not built ones**
+  (`SourceProfile.post_folders`, True only for Patreon). patreon-dl gives every
+  post its own folder, so the gallery Stash makes from it already IS the post's
+  gallery; building another beside it (what `build_post_galleries` does for
+  the scraper sites) put every multi-image post in Stash twice, and the built
+  copy's membership was the plugin's to get wrong — which is how one image sat
+  in four unrelated comics' galleries. `sync_post_folder_galleries` instead
+  finds the creator's folder and zip galleries (`find_located_galleries`,
+  confined to the creator folder because the path filter is a substring), maps
+  each to its post with `PatreonLibrary.post_for_path` (walks up to the nearest
+  post folder; None inside `EXCLUDED_DIRS`), and writes `_gallery_meta` onto it,
+  including `scene_ids` — Stash validates only *image* membership on folder/zip
+  galleries (`pkg/gallery/validation.go`), so scene links are allowed. It never
+  creates a gallery or attaches an image. `sync_folder_galleries` is skipped
+  for such sources, or its generic title would overwrite the post's. The plain
+  sync uses the strict organized rule (skip any organized gallery) because
+  these are the *user's* galleries and some were hand-curated before this
+  pass existed. OF-Scraper/jff-scraper file media by type, not post, so they
+  keep built galleries.
+- **Images inside a zip are matched by post folder.** Stash gives a zip
+  member the path `<zip>/<inner>` (`pkg/file/zip.go`, `filepath.Rel(zipPath,
+  name)`), which no disk walk indexed. `media_for_path` / `post_for_path`
+  place it in the post whose folder holds the zip — used **between** the exact
+  path and the basename fallback in both `process_profile` and
+  `group_media_by_post`, because a zip's `01.png` is exactly the kind of
+  basename another post shares.
 - **Collections → one flat gallery each** (`sync_collection_galleries`), holding
   member posts' images and linking their scenes. Stash has no nested galleries
   and no gallery→group link, so a gallery *of* galleries is impossible; Groups

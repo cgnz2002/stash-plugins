@@ -409,6 +409,7 @@ class PatreonLibrary:
         self._media = {}         # basename -> media dict (fallback; not unique)
         self._by_path = {}       # absolute path -> media dict (authoritative)
         self._by_post = {}       # post id -> [media dict]
+        self._post_dirs = {}     # normalised post folder -> post id
         self._load()
 
     # ----- discovery (mirrors SourceDatabase.find_databases) --------------
@@ -424,6 +425,7 @@ class PatreonLibrary:
         for source in PatreonSource(posts_root).iter_posts():
             post_id = source["post_id"]
             self._posts[post_id] = source
+            self._post_dirs[os.path.normpath(source["directory"])] = post_id
             if source["vanity"]:
                 # The API's vanity is authoritative; the folder name is a guess.
                 self.vanity = source["vanity"]
@@ -482,6 +484,56 @@ class PatreonLibrary:
         which one.
         """
         return self._by_path.get(path)
+
+    def post_for_path(self, path):
+        """The id of the post whose folder holds `path`, or None.
+
+        Works for anything under a post folder, not just the files indexed on
+        open: a folder gallery's directory (`<post>/images`), a zip gallery's
+        file, and an image Stash read out of that zip, whose path runs through
+        the zip (`<post>/attachments/pack.zip/01.png`) and so exists nowhere on
+        disk. Walks up to the nearest post folder.
+
+        Anything under post_info/, .thumbnails/ or image_previews/ is None, for
+        the same reason those folders are kept out of the media index: they
+        hold covers and thumbnails, not the post's media.
+        """
+        if not path:
+            return None
+        current = os.path.normpath(path)
+        while True:
+            post_id = self._post_dirs.get(current)
+            if post_id is not None:
+                return post_id
+            if os.path.basename(current) in EXCLUDED_DIRS:
+                return None
+            parent = os.path.dirname(current)
+            if parent == current:
+                return None
+            current = parent
+
+    def media_for_path(self, user_id, path):
+        """A media row for a file under a post folder that the index lacks.
+
+        The index is built by walking the disk, so it cannot hold an image Stash
+        read out of a zip. Such an image is still unambiguously that post's --
+        the zip sits in the post's own folder -- so it gets a row shaped like
+        an indexed one. None when the path is in no post at all.
+        """
+        post_id = self.post_for_path(path)
+        if post_id is None:
+            return None
+        post = self._posts[post_id]
+        return {
+            "media_id": None,
+            "post_id": post_id,
+            "link": post["url"],
+            "filename": os.path.basename(path),
+            "path": path,
+            "api_type": post["api_type"],
+            "media_type": None,
+            "posted_at": post["date"],
+        }
 
     def medias_for_model(self, user_id):
         rows = []

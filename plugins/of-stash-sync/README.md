@@ -86,6 +86,10 @@ duplicate them; a plain Sync creates missing galleries and adds any new images
 (never overwriting a gallery you've edited), while Full Sync also refreshes their
 metadata.
 
+**Patreon is different:** it doesn't get plugin-built post galleries at all.
+patreon-dl puts every post in a folder of its own, so the gallery Stash already
+makes from that folder *is* the post's gallery — see *Patreon* below.
+
 ### Folder galleries (scanned image folders)
 
 When Stash scans a folder of images it creates a **gallery for that folder**.
@@ -270,6 +274,27 @@ Patreon works differently from the other two and it's worth knowing how:
 - **Video isn't in a folder of its own.** patreon-dl drops `.mp4` into
   `images/` and `attachments/` alongside the pictures, so a post commonly
   produces a gallery *and* scenes, exactly like an OnlyFans post does.
+- **Post galleries are Stash's own folder galleries.** Every post downloads into
+  its own folder, so instead of building a second gallery of the same images,
+  the plugin writes the post's title, text, date, URL, studio, performers and
+  tags onto the gallery Stash made from the post's folder, and links the post's
+  video to it. Stash decides what's *in* a folder gallery and won't let a plugin
+  change it, so a post's gallery can never pick up another post's images. A
+  post with images in both `images/` and `attachments/` gets its metadata on
+  both folders' galleries. A plain Sync fills in unorganized galleries only, so
+  a gallery you've organized by hand is left alone; Full Sync refreshes them
+  all. Galleries built by older versions (one per post, with no folder) are no
+  longer updated and duplicate the folder galleries — delete them with the
+  gallery filter **Path** *is null* + **URL** *matches regex*
+  `patreon\.com/.*posts/` (deleting a gallery never deletes its images).
+- **Zips work too.** A zip in a post's folder becomes a zip gallery in Stash, and
+  it gets the post's metadata the same way. The images Stash reads out of the
+  zip are matched to that post as well — by the post folder the zip sits in, not
+  by filename, since names like `01.png` repeat across posts.
+- **Images merged across folders are fine.** When the same image is in
+  `images/` and `attachments/` (or in two posts), Stash merges them into one
+  image that belongs to each folder's gallery. Each gallery still gets its own
+  post's metadata.
 - **Collections become galleries.** Stash has no nested galleries and no
   gallery-to-group link, so a collection can't be a gallery *of* galleries.
   It's flattened: one gallery per collection, holding every member post's
@@ -336,7 +361,8 @@ image_previews
 ```
 
 If you ran an older standalone Patreon plugin, galleries like this may already
-exist — filter galleries by path containing `post_info` to find them.
+exist — filter galleries by path containing `post_info` to find them. The plugin
+never writes post metadata onto a gallery inside one of these folders.
 
 ### Sponsors (brands and advertisers)
 

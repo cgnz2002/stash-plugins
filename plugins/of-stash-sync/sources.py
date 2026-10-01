@@ -21,7 +21,8 @@ class SourceProfile:
     def __init__(self, key, slug, label, site_tag, studio_suffix, parent_setting,
                  parent_default, path_setting, icon_file, profile_url,
                  post_url, media_code, link_domain, reader=None,
-                 real_titles=False, merged_files_are_duplicates=False):
+                 real_titles=False, merged_files_are_duplicates=False,
+                 post_folders=False):
         # Value of schema_flags.source that selects this profile (None = the
         # OnlyFans default, since OF-Scraper databases carry no such flag).
         self.key = key
@@ -59,6 +60,17 @@ class SourceProfile:
         # and the "merge" carries no information to protect. So Patreon opts out
         # and is synced regardless of the setting.
         self.merged_files_are_duplicates = merged_files_are_duplicates
+        # Whether every post is downloaded into a folder of its own (Patreon),
+        # so the gallery Stash already makes from that folder IS the post's
+        # gallery. Then the post's metadata is written onto Stash's folder (and
+        # zip) galleries instead of the plugin building a second, duplicate
+        # gallery of the same images. Stash owns a folder gallery's contents,
+        # so the plugin can never put the wrong images in one -- the failure
+        # that put one image into four unrelated comics' galleries cannot
+        # happen. OF-Scraper and jff-scraper file media by type, not by post,
+        # so their folders say nothing about posts and they keep the built
+        # per-post galleries.
+        self.post_folders = post_folders
         self._profile_url = profile_url
         self._post_url = post_url
         self._media_code = media_code
@@ -227,6 +239,7 @@ PATREON = SourceProfile(
     link_domain="patreon.com",
     real_titles=True,
     merged_files_are_duplicates=True,
+    post_folders=True,
 )
 
 ALL_PROFILES = [ONLYFANS, JUSTFORFANS, PATREON]
