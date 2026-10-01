@@ -332,12 +332,31 @@ assert.strictEqual(CR.galleryTitle({ id: 3, title: "", files: [], folder: { path
 // Synced progress: stored 1-based on the gallery (readable in Stash), used
 // 0-based; Stash hands a true custom field back as 1.
 eq(CR.progressOf({ custom_fields: { comic_page: 4, comic_read_at: "2026-09-30T14:00:00Z", comic_seen: 5 } }),
-   { page: 3, finished: false, readAt: "2026-09-30T14:00:00Z", seen: 5 });
+   { page: 3, finished: false, readAt: "2026-09-30T14:00:00Z", seen: 5, hidden: false });
 eq(CR.progressOf({ custom_fields: { comic_finished: 1 } }).finished, true);
 eq(CR.progressOf({ custom_fields: { comic_finished: "true" } }).finished, true);
 eq(CR.progressOf({ custom_fields: { comic_finished: 0 } }).finished, false);
-eq(CR.progressOf({}), { page: null, finished: false, readAt: null, seen: 0 });
+eq(CR.progressOf({}), { page: null, finished: false, readAt: null, seen: 0, hidden: false });
+eq(CR.progressOf({ custom_fields: { comic_page: 4, comic_hide_continue: 1 } }).hidden, true);
+eq(CR.progressOf({ custom_fields: { comic_page: 4, comic_hide_continue: 1 } }).page, 3, "hiding keeps the place");
 eq(CR.progressOf({ custom_fields: { comic_page: 0 } }).page, null);
+
+// Saving progress: a partial update (other custom fields untouched) that
+// brings a comic hidden from Continue reading back; finishing clears the page.
+const sent = [];
+win.fetch = (url, opts) => { sent.push(JSON.parse(opts.body)); return Promise.resolve({ json: () => ({ data: {} }) }); };
+CR.saveProgress("12", 3, 5);
+CR.saveProgress("12", "end", 5);
+CR.hideFromContinue("12");
+const cfOf = (i) => sent[i].variables.i.custom_fields;
+eq(cfOf(0).partial.comic_page, 4);
+eq(cfOf(0).partial.comic_seen, 5);
+eq(cfOf(0).remove, ["comic_hide_continue"]);
+assert.ok(!("full" in cfOf(0)), "never a full replace");
+eq(cfOf(1).partial.comic_finished, true);
+eq(cfOf(1).remove, ["comic_hide_continue", "comic_page"]);
+assert.ok(!("comic_page" in cfOf(1).partial));
+eq(cfOf(2), { partial: { comic_hide_continue: true } });
 
 // Series: release order is date, then title (naturally), undated last.
 const ep = (id, date, title) => ({ id, date, title, custom_fields: {} });

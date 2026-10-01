@@ -159,6 +159,8 @@
   //   comic_finished true once read to the end
   //   comic_read_at  when it was last read (ISO time), for "Continue reading"
   //   comic_seen     how many pages it had then, to tell new pages apart
+  //   comic_hide_continue  taken out of the Continue reading row by hand;
+  //                  cleared the next time it is read
   CR.progressOf = function (g) {
     var cf = (g && g.custom_fields) || {};
     var page = Number(cf.comic_page);
@@ -168,21 +170,29 @@
       finished: [true, 1, "true", "1"].indexOf(cf.comic_finished) >= 0,
       readAt: cf.comic_read_at || null,
       seen: Number(cf.comic_seen) || 0,
+      hidden: [true, 1, "true", "1"].indexOf(cf.comic_hide_continue) >= 0,
     };
   };
 
   // page: 0-based index, or "end". Only these fields are sent (a partial
   // update), so the gallery's other custom fields are left alone.
   CR.saveProgress = function (galleryId, page, total) {
-    var cf = { partial: { comic_read_at: new Date().toISOString(), comic_seen: total } };
+    // Reading it again puts it back in Continue reading.
+    var cf = { partial: { comic_read_at: new Date().toISOString(), comic_seen: total }, remove: ["comic_hide_continue"] };
     if (page === "end") {
       cf.partial.comic_finished = true;
-      cf.remove = ["comic_page"];
+      cf.remove.push("comic_page");
     } else {
       cf.partial.comic_page = page + 1;
     }
     return CR.gql("mutation ($i: GalleryUpdateInput!) { galleryUpdate(input: $i) { id } }",
       { i: { id: String(galleryId), custom_fields: cf } });
+  };
+
+  // Out of the Continue reading row, keeping the page it is on.
+  CR.hideFromContinue = function (galleryId) {
+    return CR.gql("mutation ($i: GalleryUpdateInput!) { galleryUpdate(input: $i) { id } }",
+      { i: { id: String(galleryId), custom_fields: { partial: { comic_hide_continue: true } } } });
   };
 
   // Progress for many galleries in one query (Stash's list data has no
@@ -340,7 +350,7 @@
   var uiConfig = null;
   CR.uiConfig = function () {
     if (!uiConfig) {
-      uiConfig = CR.gql("query { configuration { interface { showStudioAsText } } }")
+      uiConfig = CR.gql("query { configuration { interface { showStudioAsText sfwContentMode } } }")
         .then(function (d) { return d.configuration.interface || {}; })
         .catch(function () { uiConfig = null; return {}; });
     }
@@ -383,13 +393,13 @@
   CR.fetchPages = function (galleryId) {
     return CR.gql(
       "query ($f: ImageFilterType) { findImages(image_filter: $f, filter: {per_page: -1, sort: \"path\"}) { images { " +
-        "id title date paths { image thumbnail } visual_files { ... on ImageFile { path width height } } } } }",
+        "id title date o_counter paths { image thumbnail } visual_files { ... on ImageFile { path width height } } } } }",
       { f: { galleries: { value: [String(galleryId)], modifier: "INCLUDES" } } }
     ).then(function (d) {
       return CR.sortPages(d.findImages.images).map(function (img) {
         var f = (img.visual_files || [])[0] || {};
         return { id: img.id, src: img.paths.image, thumb: img.paths.thumbnail,
-                 width: f.width || 0, height: f.height || 0, title: img.title };
+                 width: f.width || 0, height: f.height || 0, title: img.title, o: img.o_counter || 0 };
       });
     });
   };

@@ -98,6 +98,27 @@
   }
 }
 
+/* The x that takes a card out of Continue reading: shown on hover, and
+   always on touch screens, which have no hover. */
+.cr-shelf .cr-shelf-hide {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  z-index: 2;
+  padding: 0.1rem 0.4rem;
+  opacity: 0;
+  transition: opacity 0.15s ease-in-out;
+}
+.cr-shelf .grid-card:hover .cr-shelf-hide,
+.cr-shelf .cr-shelf-hide:focus {
+  opacity: 1;
+}
+@media (hover: none) {
+  .cr-shelf .cr-shelf-hide {
+    opacity: 1;
+  }
+}
+
 /* A series' own page. */
 .cr-series-head {
   margin: 0 15px 1rem;
@@ -389,6 +410,14 @@
 }
 .cr-scroll-end {
   padding: 3rem 1rem 6rem;
+}
+/* "Rate it" on the end card. */
+.cr-end-rating {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  margin-bottom: 1rem;
 }
 /* "Next in <series>" on the end card. */
 .cr-next {
