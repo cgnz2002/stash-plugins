@@ -927,6 +927,25 @@ def plugin_wrote_this(item, source):
     return False
 
 
+def plugin_made_gallery(gallery, source):
+    """Whether `gallery` is one this plugin created, rather than Stash or a user.
+
+    Two tests, both required. A `folder` means Stash made it from a scanned
+    directory and owns its contents -- it rejects membership changes on those
+    anyway, and an earlier sync may well have stamped the post URL onto one, so
+    the URL alone would wrongly select it. Absence of a folder is in turn not
+    enough on its own: a hand-made gallery has no folder either. The post /
+    collection URL on the site's own domain is what this plugin writes and a
+    person does not hand-type.
+    """
+    if gallery.get("folder"):
+        return False
+    if not source.link_domain:
+        return False
+    return any(source.link_domain in (u or "")
+               for u in (gallery.get("urls") or []))
+
+
 def build_cleanup_update(item, kind, source, username, tags):
     """Undo what a stray sync wrote onto one media, or None if nothing to undo.
 
@@ -990,6 +1009,22 @@ def build_cleanup_update(item, kind, source, username, tags):
     if item.get(credit):
         update[credit] = ""
 
+    # Gallery membership, which clearing the metadata does NOT undo: the
+    # gallery passes only ever ADD (addGalleryImages / gallery scene_ids), and
+    # reconcile_post_gallery can only detach an image when the same run can
+    # name the post that really owns it -- which it never can for a file that
+    # belongs to no post at all. So a stray stayed a member of the post gallery
+    # that wrongly claimed it even after being reverted, and one torrented
+    # image was observed sitting in four unrelated comics' galleries. Only the
+    # plugin's own galleries are detached; folder galleries and hand-made ones
+    # keep the media. Both ImageUpdateInput and SceneUpdateInput take
+    # `gallery_ids`, so this rides along on the same mutation.
+    galleries = item.get("galleries") or []
+    kept_galleries = [g for g in galleries
+                      if not plugin_made_gallery(g, source)]
+    if len(kept_galleries) != len(galleries):
+        update["gallery_ids"] = [g["id"] for g in kept_galleries]
+
     # Nothing but the id means there is nothing of ours left on this media --
     # already cleaned, or it only ever carried the studio that found it. Return
     # None so the caller skips it entirely rather than sending a write that
@@ -1048,8 +1083,13 @@ def cleanup_stray_media(client, configured, tags, workers, totals):
                 # path, which is the only thing that explains why the file was
                 # ever touched -- "a creator you do subscribe to is a substring
                 # of a folder name you don't recognise".
-                log.LogInfo("  Stray {} {} [{}]: {}".format(
-                    kind, item["id"], studio_name or "no studio",
+                detached = ""
+                if "gallery_ids" in update:
+                    detached = " (leaving {} plugin gallery/ies)".format(
+                        len(item.get("galleries") or [])
+                        - len(update["gallery_ids"]))
+                log.LogInfo("  Stray {} {} [{}]{}: {}".format(
+                    kind, item["id"], studio_name or "no studio", detached,
                     paths[0] if paths else "(no path)"))
                 tasks.append(_media_task(client, kind, update))
 

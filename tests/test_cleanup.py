@@ -274,6 +274,63 @@ assert "stash_ids { stash_id endpoint }" in open(
     plugin_file("stash.py"), encoding="utf-8").read()
 
 
+# --- a reverted stray is also taken out of the plugin's own galleries -------
+# Clearing the metadata does not undo MEMBERSHIP. The gallery passes only ever
+# add, and reconcile_post_gallery can only detach an image when the same run
+# can name the post that really owns it -- which it never can for a file that
+# belongs to no post at all. So a cleaned torrent image stayed a member of the
+# post gallery that wrongly claimed it; one was observed in four unrelated
+# comics' galleries.
+POST_GAL = {"id": "g1", "title": "The Priest's",
+            "urls": ["https://www.patreon.com/Mirenac/posts/priest-123"],
+            "folder": None}
+OTHER_POST_GAL = {"id": "g2", "title": "Some other post",
+                  "urls": ["https://www.patreon.com/Mirenac/posts/other-9"],
+                  "folder": None}
+FOLDER_GAL = {"id": "g3", "title": "Mirenac Patreon images",
+              "urls": ["https://www.patreon.com/Mirenac/posts/priest-123"],
+              "folder": {"path": "/data/media/Patreon/Mirenac - Mirenac"}}
+HAND_GAL = {"id": "g4", "title": "Comics I like", "urls": [], "folder": None}
+
+assert sync.plugin_made_gallery(POST_GAL, P) is True
+# a folder gallery is Stash's -- it owns the contents and rejects membership
+# changes, and an earlier sync may have stamped the post URL onto it, so the
+# URL alone would wrongly select it
+assert sync.plugin_made_gallery(FOLDER_GAL, P) is False
+# absence of a folder is not enough on its own: a hand-made gallery has none
+assert sync.plugin_made_gallery(HAND_GAL, P) is False
+# the domain has to be this site's
+assert sync.plugin_made_gallery(POST_GAL, OF) is False
+
+in_galleries = dict(STRAY, id="img-gal",
+                    galleries=[POST_GAL, OTHER_POST_GAL, FOLDER_GAL, HAND_GAL])
+ug = sync.build_cleanup_update(in_galleries, "image", P, "Mirenac", None)
+assert ug["gallery_ids"] == ["g3", "g4"], ug["gallery_ids"]
+
+# nothing of ours among them -> the field is not sent at all, so the write
+# can't disturb memberships it isn't responsible for
+untouched = dict(STRAY, id="img-gal2", galleries=[FOLDER_GAL, HAND_GAL])
+assert "gallery_ids" not in sync.build_cleanup_update(
+    untouched, "image", P, "Mirenac", None)
+# ...and membership alone is not a reason to write: a media carrying only a
+# plugin gallery still gets cleaned, but one carrying nothing is still skipped
+only_gal = dict(nothing, id="img-gal3", galleries=[POST_GAL])
+assert sync.build_cleanup_update(only_gal, "image", P, "Mirenac", None) == {
+    "id": "img-gal3", "gallery_ids": []}
+
+# scenes relate to galleries too (the plugin links a post's scene to the post
+# gallery), and SceneUpdateInput takes gallery_ids just as ImageUpdateInput does
+scene_gal = dict(scene_stray, id="scene-gal", galleries=[POST_GAL, HAND_GAL])
+sg = sync.build_cleanup_update(scene_gal, "scene", P, "Mirenac", None)
+assert sg["gallery_ids"] == ["g4"], sg["gallery_ids"]
+
+# the queries have to ask for the galleries, and for `folder` -- without the
+# latter every folder gallery carrying a stamped post URL looks like ours
+stash_src = open(plugin_file("stash.py"), encoding="utf-8").read()
+assert stash_src.count("galleries { id title urls folder { path } }") == 2, \
+    "both the scene and the image cleanup query"
+
+
 # --- the tasks exist, and the preview is a dry run --------------------------
 manifest = open(plugin_file("of-stash-sync.yml"), encoding="utf-8").read()
 assert "mode: cleanup" in manifest

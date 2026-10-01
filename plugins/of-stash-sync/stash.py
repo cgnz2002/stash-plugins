@@ -191,6 +191,7 @@ class StashClient:
                         stash_ids { stash_id endpoint }
                         tags { id name } performers { id name }
                         studio { id name }
+                        galleries { id title urls folder { path } }
                         files { path }
                     }
                 }
@@ -205,6 +206,7 @@ class StashClient:
                         id title organized urls photographer details date code
                         tags { id name } performers { id name }
                         studio { id name }
+                        galleries { id title urls folder { path } }
                         visual_files {
                             ... on VideoFile { path }
                             ... on ImageFile { path }

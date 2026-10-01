@@ -372,6 +372,20 @@ run, so there is no per-site task:
   what makes an otherwise destructive pass safe to run unattended: it can only
   undo a claim the plugin itself made. Folder galleries are excluded (Stash
   rejects the mutation, same as `addGalleryImages`).
+  **The gap that leaves, and what fills it:** `reconcile_post_gallery` cannot
+  detach a file that belongs to *no* post — there is no other owner to name —
+  so a stray the substring-path bug pulled in stayed a member of the gallery
+  that wrongly claimed it even after `mode: cleanup` stripped its metadata (one
+  torrented image was observed in four unrelated comics' galleries). So
+  `build_cleanup_update` also sends `gallery_ids`, dropping the plugin's own
+  galleries from a reverted stray. `plugin_made_gallery` gates it on **two**
+  tests: no `folder` (Stash owns a folder gallery's contents, and an earlier
+  sync may well have stamped the post URL onto one) **and** a URL on the site's
+  own domain (a hand-made gallery has no folder either). The field is omitted
+  entirely when nothing of ours is among them, so the write cannot disturb a
+  membership it isn't responsible for. Both `ImageUpdateInput` and
+  `SceneUpdateInput` take `gallery_ids`, so it rides along on the same mutation
+  — no second request, no extra chance to half-apply.
 - **`ProtectedTags` — another plugin's tags are not ours to delete.** A
   sync/full pass replaces `tag_ids`, and `keepManualEdits` (off by default)
   protects the *user's* manual tags, which is a different question from another
