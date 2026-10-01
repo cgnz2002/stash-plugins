@@ -58,7 +58,9 @@ read, a **Read** badge marks one you finished, and **3 new** marks pages added
 since you last read it.
 
 **Continue reading.** The comics you are part-way through sit in a row at the
-top of the Comics page, most recent first.
+top of the Comics page, most recent first. The **×** on a card takes it out
+of the row without losing your place; it comes back the next time you read
+it.
 
 **Your place is saved on the comic itself**, so it is the same on your phone,
 tablet and computer. It is stored in the gallery's custom fields, where you
@@ -118,6 +120,7 @@ through a series.
 | First / last page | Home / End | Home / End |
 | Show / hide toolbars | click the middle, or move the mouse | tap |
 | Details panel | I, or the ⓘ button | I, or the ⓘ button |
+| O-count | the O button (Stash's own), for the page on screen | the same, for the page you're on |
 | Full screen | F | F |
 | Leave | Esc or Back | Esc or Back |
 
@@ -127,8 +130,13 @@ through a series.
 - **Auto / 1 / 2** chooses spreads. Auto shows two pages on a wide screen and
   one on a narrow one.
 - **− / +** in scroll mode sets the strip width.
-- The reader remembers your page per comic in this browser, and starts over
-  once you finish a comic.
+- **The O button** counts on the page in view. Stash keeps O counts on
+  images, not galleries, so it is the page that gets it (you see it on that
+  image in Stash). With two pages on screen it asks which one. It follows
+  Stash's SFW mode (a thumbs-up), and like Stash's own button its arrow has
+  Decrement and Reset.
+- **The end** of a comic has **Rate it**, the same rating as the details
+  panel.
 - **Details** shows the comic's studio, title, date, page count, rating,
   description, performers, tags and links, like the panel on a gallery page.
   Rate it right there. A performer or studio opens their **Comics** tab, a tag

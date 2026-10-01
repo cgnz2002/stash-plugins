@@ -158,7 +158,13 @@
       title: title,
       linkClassName: "gallery-card-header",
       image: cover,
-      overlays: sub("Overlays"),
+      overlays: props.onHide
+        ? h("button", {
+            type: "button", className: "btn btn-secondary btn-sm cr-shelf-hide",
+            title: "Remove from Continue reading (your place is kept)",
+            onClick: function (e) { e.preventDefault(); e.stopPropagation(); props.onHide(); },
+          }, h(CR.Icon, { name: "faXmark" }))
+        : sub("Overlays"),
       details: sub("Details"),
       popovers: sub("Popovers"),
       selected: props.selected,
@@ -214,24 +220,39 @@
       h("div", { className: "cr-shelf-cards" }, props.children));
   };
 
-  // Comics part-way through, most recently read first.
+  // Comics part-way through, most recently read first. The x on a card takes
+  // it out of this row without touching its progress; reading it again
+  // brings it back (CR.saveProgress clears the flag).
   function ContinueReading() {
+    var toast = CR.useToast();
+    var gone = React.useState({}); // hidden just now, before a refetch
     var data = CR.useAsync(function () {
       return CR.tags().then(function (tags) {
         return CR.gql("query ($f: GalleryFilterType) { findGalleries(gallery_filter: $f, filter: {per_page: -1}) { galleries { " +
             CR.GALLERY_FIELDS + " } } }",
           { f: CR.comicFilter(tags, { custom_fields: [{ field: "comic_page", modifier: "NOT_NULL" }] }) });
       }).then(function (d) {
-        return d.findGalleries.galleries.sort(function (a, b) {
+        return d.findGalleries.galleries.filter(function (g) { return !CR.progressOf(g).hidden; }).sort(function (a, b) {
           var ra = CR.progressOf(a).readAt || "", rb = CR.progressOf(b).readAt || "";
           return ra < rb ? 1 : ra > rb ? -1 : 0;
         }).slice(0, 20);
       });
     }, []);
-    if (!data.data || !data.data.length) return null;
+    var shown = (data.data || []).filter(function (g) { return !gone[0][g.id]; });
+    if (!shown.length) return null;
+    function hide(g) {
+      gone[1](function (cur) { var next = Object.assign({}, cur); next[g.id] = true; return next; });
+      CR.hideFromContinue(g.id)
+        .then(function () { toast.success("Removed " + CR.galleryTitle(g) + " from Continue reading. Your place is kept."); })
+        .catch(function (e) {
+          gone[1](function (cur) { var next = Object.assign({}, cur); delete next[g.id]; return next; });
+          toast.error(e);
+        });
+    }
     return h(CR.Shelf, { title: "Continue reading" },
-      data.data.map(function (g) {
-        return h(ComicCard, { key: g.id, gallery: g, plain: true, cardWidth: 170, progress: CR.progressOf(g) });
+      shown.map(function (g) {
+        return h(ComicCard, { key: g.id, gallery: g, plain: true, cardWidth: 170, progress: CR.progressOf(g),
+                              onHide: function () { hide(g); } });
       }));
   }
   CR.ContinueReading = ContinueReading;

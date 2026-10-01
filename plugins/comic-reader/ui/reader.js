@@ -112,6 +112,57 @@
         CR.galleryTitle(s.next), " ", h(CR.Icon, { name: "faArrowRight" })));
   }
 
+  // "Rate it" on the end card, sharing the details panel's rating.
+  function EndRating(props) {
+    if (!props.rating) return null;
+    return h("div", { className: "cr-end-rating" },
+      h("div", { className: "text-muted" }, "Rate it"),
+      h(CR.ComicRating, props.rating));
+  }
+
+  // Stash's own O counter -- the image viewer's o-counter button group, with
+  // its SweatDrops icon (a thumbs-up and "Likes" in SFW mode) -- for the page
+  // in view. Stash keeps O counts on images, not galleries, so it counts the
+  // page. Two pages in view: the button opens a menu to pick one.
+  function OCounter(props) {
+    var B = CR.Bootstrap;
+    var Sweat = CR.api.components.SweatDrops;
+    var icon = props.sfw ? h(CR.Icon, { name: "faThumbsUp" }) : (Sweat ? h(Sweat) : "O");
+    var label = props.sfw ? "Like" : "O-count";
+    var pages = props.pages;
+    if (!pages.length || !B.ButtonGroup) return null;
+    var stop = function (e) { e.stopPropagation(); };
+
+    if (pages.length === 1) {
+      var p = pages[0];
+      return h(B.ButtonGroup, { className: "o-counter", onClick: stop },
+        h(B.Button, { variant: "secondary", size: "sm", className: "minimal pr-1",
+                      title: label + " for page " + p.n, onClick: function () { props.onChange(p.id, 1); } },
+          icon, h("span", { className: "ml-2" }, p.o)),
+        p.o && B.DropdownButton
+          ? h(B.DropdownButton, { as: B.ButtonGroup, title: " ", variant: "secondary", size: "sm", className: "pl-0 show-carat" },
+              h(B.Dropdown.Item, { onClick: function () { props.onChange(p.id, -1); } },
+                h(CR.Icon, { name: "faMinus" }), h("span", null, " Decrement")),
+              h(B.Dropdown.Item, { onClick: function () { props.onChange(p.id, 0); } },
+                h(CR.Icon, { name: "faBan" }), h("span", null, " Reset")))
+          : null);
+    }
+    var total = pages.reduce(function (n, x) { return n + x.o; }, 0);
+    return h(B.Dropdown, { as: B.ButtonGroup, className: "o-counter", onClick: stop },
+      h(B.Dropdown.Toggle, { variant: "secondary", size: "sm", className: "minimal", title: label + " for a page in view" },
+        icon, h("span", { className: "ml-2" }, total)),
+      h(B.Dropdown.Menu, null,
+        pages.map(function (x) {
+          return h(B.Dropdown.Item, { key: x.id, onClick: function () { props.onChange(x.id, 1); } },
+            icon, h("span", null, " Page " + x.n + " · " + x.o));
+        }),
+        pages.some(function (x) { return x.o; }) ? h(B.Dropdown.Divider) : null,
+        pages.filter(function (x) { return x.o; }).map(function (x) {
+          return h(B.Dropdown.Item, { key: "d" + x.id, onClick: function () { props.onChange(x.id, -1); } },
+            h(CR.Icon, { name: "faMinus" }), h("span", null, " Decrement page " + x.n));
+        })));
+  }
+
   // ------------------------------------------------------------ pages view
 
   function PagesView(props) {
@@ -150,6 +201,7 @@
       body = h("div", { className: "cr-end-card", onClick: function (e) { e.stopPropagation(); } },
         h("h3", null, "The end"),
         h("p", { className: "text-muted" }, props.title),
+        h(EndRating, { rating: props.rating }),
         h(NextUp, { series: props.series, onOpen: props.onOpen }),
         h("div", { className: "cr-end-actions" },
           h(CR.Button, { variant: props.series && props.series.next ? "secondary" : "primary", onClick: props.onExit }, "Back to comics"),
@@ -225,6 +277,7 @@
         h("div", { className: "cr-end-card cr-scroll-end", onClick: function (e) { e.stopPropagation(); } },
           h("h3", null, "The end"),
           h("p", { className: "text-muted" }, props.title),
+          h(EndRating, { rating: props.rating }),
           h(NextUp, { series: props.series, onOpen: props.onOpen }),
           h(CR.Button, { variant: props.series && props.series.next ? "secondary" : "primary", onClick: props.onExit }, "Back to comics"))));
   }
@@ -274,6 +327,12 @@
     var scrollProgress = React.useState(0);
     var toast = CR.useToast();
     var rootRef = React.useRef(null);
+    // Stash's rating control and SweatDrops icon come with its Galleries chunk.
+    CR.useInfoComponents();
+    var ui = CR.useAsync(CR.uiConfig, []);
+    var sfw = !!(ui.data && ui.data.sfwContentMode);
+    var ratingNow = React.useState(undefined); // set once rated in this reader
+    var oCounts = React.useState({});          // image id -> O count after a change here
     // Details: docked, it stays as the user last left it (open the first
     // time); as a sheet on a phone it would cover the page, so it starts shut.
     var docked = viewport.w >= DOCK_MIN;
@@ -379,6 +438,29 @@
       else window.location.assign(to);
     }, [flush, props.history]);
     var series = d ? d.series : null;
+
+    // One rating for the details panel and the end card, so rating in either
+    // shows in both.
+    var rating = gallery ? {
+      value: ratingNow[0] !== undefined ? ratingNow[0] : (gallery.rating100 == null ? null : gallery.rating100),
+      onSetRating: function (v) {
+        var prev = ratingNow[0];
+        ratingNow[1](v);
+        CR.gql("mutation ($id: ID!, $r: Int) { galleryUpdate(input: {id: $id, rating100: $r}) { id } }", { id: galleryId, r: v })
+          .then(function () { gallery.rating100 = v; })
+          .catch(function (e) { ratingNow[1](prev); toast.error(e); });
+      },
+    } : null;
+
+    // O counts, kept on Stash's images: +1, -1, or 0 to reset.
+    function changeO(imageId, delta) {
+      var m = delta > 0 ? "imageIncrementO" : delta < 0 ? "imageDecrementO" : "imageResetO";
+      CR.gql("mutation ($id: ID!) { n: " + m + "(id: $id) }", { id: imageId })
+        .then(function (r) {
+          oCounts[1](function (cur) { var next = Object.assign({}, cur); next[imageId] = r.n; return next; });
+        })
+        .catch(function (e) { toast.error(e); });
+    }
 
     var exit = React.useCallback(function () {
       if (props.onExit) props.onExit();
@@ -489,6 +571,16 @@
     }
 
     var title = CR.galleryTitle(gallery);
+    // The page(s) on screen, for the O counter: the spread, or the strip's
+    // current page. Nothing on the end card.
+    var inViewIdx = layout === "pages"
+      ? (spreadIndex < spreads.length ? spreads[spreadIndex] : [])
+      : (pos[0] === "end" ? [] : [page]);
+    var inView = inViewIdx.map(function (i) {
+      var pg = pages[i];
+      var o = oCounts[0][pg.id];
+      return { id: pg.id, n: i + 1, o: o !== undefined ? o : pg.o };
+    });
     var counter;
     if (layout === "pages") {
       if (spreadIndex >= spreads.length) counter = "End";
@@ -509,6 +601,7 @@
         gallery.studio ? h("div", { className: "cr-title-sub text-muted" }, gallery.studio.name) : null),
       h("div", { className: "cr-bar-group" },
         h("span", { className: "cr-counter" }, counter),
+        h(OCounter, { pages: inView, sfw: sfw, onChange: changeO }),
         h(Segmented, {
           value: layout, onChange: changeLayout,
           options: [
@@ -562,7 +655,7 @@
           gallery: gallery, family: d.family, pages: pages.length, layout: layout,
           history: props.history, docked: docked, onClose: toggleInfo,
           onRated: function (v) { gallery.rating100 = v; },
-          series: series, onOpen: openComic,
+          series: series, onOpen: openComic, rating: rating,
           onSeriesChanged: function () { reload[1](function (n) { return n + 1; }); },
         }));
       if (!docked) info = h(React.Fragment, null, h("div", { className: "cr-info-backdrop", onClick: toggleInfo }), info);
@@ -572,10 +665,10 @@
                       onPointerMove: function (e) { if (e.pointerType === "mouse") chrome.show(); } },
       layout === "pages"
         ? h(PagesView, { pages: pages, spreads: spreads, spreadIndex: spreadIndex, go: go, goTo: goTo,
-                         chrome: chrome, title: title, onExit: exit, series: series, onOpen: openComic })
+                         chrome: chrome, title: title, onExit: exit, series: series, onOpen: openComic, rating: rating })
         : h(ScrollView, { key: "scroll-" + galleryId, pages: pages, width: stripWidth[0],
                           startPage: page, chrome: chrome, title: title, onExit: exit,
-                          series: series, onOpen: openComic,
+                          series: series, onOpen: openComic, rating: rating,
                           onPage: function (p, frac) {
                             scrollProgress[1](frac);
                             // At the very bottom it counts as finished, so the next read starts over.

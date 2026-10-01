@@ -684,6 +684,17 @@ its README. What matters when changing it:
   reader's window key handler ignores keys while a Bootstrap modal is open
   (`body.modal-open`): react-bootstrap's Esc closes the dialog, and the same
   event used to close the reader behind it too.
+- **O counts go on the page, not the comic**: Stash has O counters on
+  images and scenes only (`imageIncrementO`/`DecrementO`/`ResetO`), none on
+  galleries. The reader's button copies Stash's `OCounterButton` markup (the
+  image viewer's `.o-counter` button group; the component itself isn't
+  exposed) with the exposed `SweatDrops` icon, and follows
+  `interface.sfwContentMode`. A two-page spread gets a menu instead of a
+  guess. The end card's rating and the details panel's share one state in
+  the Reader, so rating in one shows in the other.
+- **Continue reading's x** sets `comic_hide_continue`; `saveProgress` always
+  removes it (removing an absent custom field is a no-op in Stash), so
+  reading a hidden comic again brings it back, and the page is never lost.
 - **Look and theming: build from Stash's own parts.** Cards are
   `PluginApi.components.GridCard` with the `gallery-card` class names and
   Stash's own `GalleryCard.Overlays/Details/Popovers`, sized like Stash's

@@ -32,6 +32,17 @@
     return use && chunks.length ? use(chunks) : false;
   };
 
+  // Stash's own rating control (stars or decimal, per the user's setting),
+  // for the details panel and the end of a comic alike. props: value,
+  // onSetRating.
+  CR.ComicRating = function (props) {
+    var loading = CR.useInfoComponents();
+    var Rating = !loading && api.components.RatingSystem;
+    if (!Rating) return null;
+    return h(CR.Boundary, { name: "rating" },
+      h(Rating, { value: props.value, onSetRating: props.onSetRating, clickToRate: true, withoutContext: true }));
+  };
+
   // A list-page URL criterion, encoded the way Stash's own list URLs are:
   // JSON with the braces outside strings turned into parentheses.
   function criterionParam(obj) {
@@ -154,8 +165,9 @@
       h("h3", { className: "cr-info-title" }, CR.galleryTitle(g)),
       h("div", { className: "cr-info-meta text-muted" }, date, date ? " · " : null, meta),
       Rating ? h("div", { className: "cr-info-rating" },
-        h(CR.Boundary, { name: "rating" },
-          h(Rating, { value: rating[0], onSetRating: setRating, clickToRate: true, withoutContext: true })))
+        props.rating
+          ? h(CR.ComicRating, props.rating)
+          : h(CR.ComicRating, { value: rating[0], onSetRating: setRating }))
         : null,
       g.details ? h("p", { className: "pre cr-info-details" }, g.details) : null,
       h(Section, { show: true, title: "Series" },
