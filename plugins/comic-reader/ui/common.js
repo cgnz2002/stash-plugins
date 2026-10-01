@@ -374,22 +374,92 @@
   CR.naturalCompare = function (a, b) { return collator.compare(a || "", b || ""); };
 
   function pagePath(img) {
+    if (img.path) return img.path;
     var f = (img.visual_files || [])[0];
     return (f && f.path) || img.title || "";
   }
+  CR.basename = basename;
 
-  // Reading order: by date, then by path. A .cbz has no dates, so its file
-  // names decide; a comic assembled from one-page-per-post images gets each
-  // post's date, which is the order the artist released them in -- whatever
-  // order the images were added to the gallery.
-  CR.sortPages = function (images) {
-    return images.slice().sort(function (a, b) {
-      var da = a.date || "", db = b.date || "";
-      if (da !== db) return da < db ? -1 : 1;
-      return CR.naturalCompare(pagePath(a), pagePath(b));
-    });
+  // Reading order. By default the natural order of the files' paths
+  // ("page2" before "page10"): patreon-dl numbers a post's files in post
+  // order, a .cbz's pages are named in order, and Patreon post folders start
+  // with the post id, so pages gathered from several posts read in release
+  // order too. Not dates by default: a comic shared in one post gives every
+  // page the same date (and the sync gives them the same title too).
+  //
+  // Per comic, on the gallery's custom fields:
+  //   comic_order       "date" (post date, then path) or "custom"; absent
+  //                     means path order
+  //   comic_page_order  the custom order, image ids comma-separated (Stash's
+  //                     custom fields don't take lists). Kept when another
+  //                     order is chosen, so switching back loses nothing.
+  //                     Pages added since go after it, in path order.
+  CR.orderOf = function (g) {
+    var cf = (g && g.custom_fields) || {};
+    var ids = String(cf.comic_page_order || "").split(",").filter(Boolean);
+    var mode = cf.comic_order === "date" ? "date" : cf.comic_order === "custom" && ids.length ? "custom" : "path";
+    return { mode: mode, ids: ids };
   };
 
+  CR.sortPages = function (images, order) {
+    var mode = (order && order.mode) || "path";
+    var byPath = function (a, b) { return CR.naturalCompare(pagePath(a), pagePath(b)); };
+    if (mode === "date") {
+      // Undated pages go last, not first: a page the sync hasn't reached yet
+      // shouldn't jump to the front.
+      return images.slice().sort(function (a, b) {
+        var da = a.date || "", db = b.date || "";
+        if (da !== db) return !da ? 1 : !db ? -1 : da < db ? -1 : 1;
+        return byPath(a, b);
+      });
+    }
+    if (mode === "custom") {
+      var at = {};
+      order.ids.forEach(function (id, i) { at[String(id)] = i; });
+      return images.slice().sort(function (a, b) {
+        var ia = at[String(a.id)], ib = at[String(b.id)];
+        if (ia !== undefined && ib !== undefined) return ia - ib;
+        if (ia !== undefined) return -1;
+        if (ib !== undefined) return 1;
+        return byPath(a, b);
+      });
+    }
+    return images.slice().sort(byPath);
+  };
+
+  // The folder that tells a page's source apart: the nearest one that isn't a
+  // generic media folder (patreon-dl keeps a post's files in images/, so the
+  // post folder -- "<post id> - <title>" -- is the one that says which post).
+  var GENERIC_DIRS = { images: 1, image: 1, attachments: 1, embed: 1, media: 1, pages: 1, photos: 1 };
+  CR.pageFolder = function (path) {
+    var parts = String(path || "").split(/[\\/]/).filter(Boolean);
+    for (var i = parts.length - 2; i >= 0; i--) {
+      if (!GENERIC_DIRS[parts[i].toLowerCase()]) return parts[i];
+    }
+    return "";
+  };
+  // Whether a comic's pages come from more than one folder (then the folder
+  // is worth showing; one .cbz or one post, it isn't).
+  CR.manyFolders = function (pages) {
+    var seen = null;
+    for (var i = 0; i < pages.length; i++) {
+      var f = CR.pageFolder(pages[i].path);
+      if (seen === null) seen = f;
+      else if (f !== seen) return true;
+    }
+    return false;
+  };
+
+  CR.saveOrder = function (galleryId, mode, ids) {
+    var cf;
+    if (mode === "custom") cf = { partial: { comic_order: "custom", comic_page_order: ids.join(",") } };
+    else if (mode === "date") cf = { partial: { comic_order: "date" } };
+    else cf = { remove: ["comic_order"] };
+    return CR.gql("mutation ($i: GalleryUpdateInput!) { galleryUpdate(input: $i) { id } }",
+      { i: { id: String(galleryId), custom_fields: cf } });
+  };
+
+  // A comic's pages in path order; the reader applies the comic's own order.
   CR.fetchPages = function (galleryId) {
     return CR.gql(
       "query ($f: ImageFilterType) { findImages(image_filter: $f, filter: {per_page: -1, sort: \"path\"}) { images { " +
@@ -398,8 +468,10 @@
     ).then(function (d) {
       return CR.sortPages(d.findImages.images).map(function (img) {
         var f = (img.visual_files || [])[0] || {};
+        var path = pagePath(img);
         return { id: img.id, src: img.paths.image, thumb: img.paths.thumbnail,
-                 width: f.width || 0, height: f.height || 0, title: img.title, o: img.o_counter || 0 };
+                 width: f.width || 0, height: f.height || 0, title: img.title, o: img.o_counter || 0,
+                 path: path, file: basename(path), date: img.date || null };
       });
     });
   };

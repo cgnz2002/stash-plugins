@@ -95,6 +95,7 @@ plugins/
     comic-reader.js                  Backend (Stash's embedded JS, ES5): tags, hooks, tasks
     ui/common.js                     Shared UI helpers; defines window.ComicReader (load first)
     ui/info.js                       The reader's details panel (docked, or a sheet on phones)
+    ui/overview.js                   The reader's page overview: jump to a page, Order by, Reorder
     ui/reader.js, ui/library.js      The reader; the Comics list (Stash's own) + comic cards
     ui/series.js                     Series: add-to-series dialog, Series tab, a series' page
     ui/builder.js                    "New comic from images"
@@ -575,10 +576,20 @@ its README. What matters when changing it:
   into a user's existing default filter and must keep everything else --
   including `depth`, which applies to exclusions too: only a criterion the
   plugin creates gets `depth: -1`; the family is listed id by id instead.
-- **Reading order** is post date, then natural file-name order
-  (`CR.sortPages`): a `.cbz` has no dates, and a comic assembled from
-  one-page-per-post images must read in release order whatever order they
-  were added. Stash's own gallery view sorts by path only.
+- **Reading order defaults to the natural file path** (`CR.sortPages`), not
+  the date: 0.5 and earlier sorted by date first, and every page of a comic
+  shared in one Patreon post has the same date (and the same synced title),
+  so the date decided nothing and undated pages jumped to the front.
+  patreon-dl numbers a post's files in post order and post folders start
+  with the post id, so path order is release order across posts too. Per
+  comic, `comic_order` (`date` / `custom`) and `comic_page_order` (image ids
+  comma-separated -- Stash custom fields reject lists) override it; the
+  custom list survives switching modes, and pages missing from it follow in
+  path order. In `date` mode an undated page goes last. The reader sorts
+  `CR.fetchPages`' path-ordered pages itself, and keeps the page on screen
+  when the order changes. The overview (`ui/overview.js`) labels pages by
+  file name plus `CR.pageFolder` (skipping generic `images/` etc.) when a
+  comic spans folders, since every post has a `1.jpg`.
 - **Share patched components politely -- 0.1.0 blanked Stash for Stash TV
   users.** Stash's patch chain (`RB` in the bundle) *replaces* the argument
   list with whatever a `before` returns, then calls each `instead` with those

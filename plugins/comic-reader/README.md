@@ -108,9 +108,10 @@ a comic to clear that.
    Webtoon scroll.
 4. **Create comic** opens it in the reader.
 
-Picking order doesn't matter. Pages are always read in post-date order, then
-by file name. "Hide pages already in a comic" keeps the list short as you work
-through a series.
+Picking order doesn't matter: pages are read in file order (for Patreon that
+is release order, because post folders start with the post id), and the
+reader's **Pages** view can change it. "Hide pages already in a comic" keeps
+the list short as you work through a series.
 
 ### Reader controls
 
@@ -121,6 +122,7 @@ through a series.
 | Show / hide toolbars | click the middle, or move the mouse | tap |
 | Details panel | I, or the ⓘ button | I, or the ⓘ button |
 | O-count | the O button (Stash's own), for the page on screen | the same, for the page you're on |
+| Pages (overview, order) | G, or the ▦ button | G, or the ▦ button |
 | Full screen | F | F |
 | Leave | Esc or Back | Esc or Back |
 
@@ -137,6 +139,30 @@ through a series.
   Decrement and Reset.
 - **The end** of a comic has **Rate it**, the same rating as the details
   panel.
+
+### Page order
+
+Pages are read in **file order**: by folder and file name, naturally (`2`
+before `10`). For Patreon that is the creator's order: patreon-dl numbers a
+post's files in the order they were posted, and post folders start with the
+post id, so a comic gathered from several posts reads in release order.
+(Dates aren't the default: a comic shared in one post gives every page the
+same date.)
+
+When a comic is still out of order, open **Pages** (G):
+
+- Every page is shown with its number, file name, date and, for a comic
+  gathered from several posts, the post folder it came from, so you can see
+  why a page sits where it does. Tap a page to go to it.
+- **Order by** switches that comic between **File path** (the default),
+  **Date** (post date, then file path) and **Custom**.
+- **Reorder** lets you drag pages into place (or use the arrows on a touch
+  screen). **Save order** keeps it on the comic, on every device; pages added
+  later go after it. Switching back to File path keeps your custom order, so
+  Custom brings it back.
+
+The choice is stored on the gallery as custom fields: `comic_order` and
+`comic_page_order` (the page ids, in order).
 - **Details** shows the comic's studio, title, date, page count, rating,
   description, performers, tags and links, like the panel on a gallery page.
   Rate it right there. A performer or studio opens their **Comics** tab, a tag
