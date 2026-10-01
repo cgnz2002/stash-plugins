@@ -1005,9 +1005,12 @@ def build_cleanup_update(item, kind, source, username, tags):
     if len(kept) != len(item.get("tags") or []):
         update["tag_ids"] = [t["id"] for t in kept]
 
-    credit = "director" if kind == "scene" else "photographer"
-    if item.get(credit):
-        update[credit] = ""
+    # Galleries are skipped: _gallery_meta keeps crew as linked performers and
+    # never writes a gallery photographer, so one there is the user's.
+    if kind != "gallery":
+        credit = "director" if kind == "scene" else "photographer"
+        if item.get(credit):
+            update[credit] = ""
 
     # Gallery membership, which clearing the metadata does NOT undo: the
     # gallery passes only ever ADD (addGalleryImages / gallery scene_ids), and
@@ -1032,6 +1035,40 @@ def build_cleanup_update(item, kind, source, username, tags):
     if len(update) == 1:
         return None
     return update
+
+
+def build_gallery_cleanup_update(gal, source, username):
+    """Undo what a sync wrote onto a folder/zip gallery outside the libraries.
+
+    Which fields that is depends on which pass did it, so the revert follows
+    the evidence. A post URL means the per-post pass treated the gallery as a
+    post's and wrote the post's metadata wholesale -- revert like media. Only
+    the adoption title means sync_folder_galleries did it, and that pass sets
+    exactly title, studio, the creator performer, the site tag and organized;
+    the gallery's details, date and code were never ours, so they are left
+    alone rather than wiped on the strength of a title.
+    """
+    if plugin_wrote_this(gal, source):
+        return build_cleanup_update(gal, "gallery", source, username, None)
+
+    update = {"id": gal["id"]}
+    if gal.get("title"):
+        update["title"] = ""
+    if gal.get("studio"):
+        update["studio_id"] = None
+    if gal.get("organized"):
+        update["organized"] = False
+    target = (username or "").strip().lower()
+    performers = [p for p in (gal.get("performers") or [])
+                  if (p.get("name") or "").strip().lower() != target]
+    if len(performers) != len(gal.get("performers") or []):
+        update["performer_ids"] = [p["id"] for p in performers]
+    site_tag = source.site_tag.strip().lower()
+    kept = [t for t in (gal.get("tags") or [])
+            if (t.get("name") or "").strip().lower() != site_tag]
+    if len(kept) != len(gal.get("tags") or []):
+        update["tag_ids"] = [t["id"] for t in kept]
+    return update if len(update) > 1 else None
 
 
 def cleanup_stray_media(client, configured, tags, workers, totals):
@@ -1093,6 +1130,33 @@ def cleanup_stray_media(client, configured, tags, workers, totals):
                     paths[0] if paths else "(no path)"))
                 tasks.append(_media_task(client, kind, update))
 
+        # Folder and zip galleries outside the data paths that a sync adopted.
+        # A gallery the plugin created has no path, so it can never be
+        # "outside" and is out of this loop's reach by construction -- its
+        # stray members are detached by the media pass above instead.
+        try:
+            galleries = client.find_galleries_under_studio(source.parent_id)
+        except RuntimeError as e:
+            log.LogWarning("Could not list galleries for {}: {}".format(
+                source.label, e))
+            galleries = []
+        for gal in galleries:
+            paths = gallery_paths(gal)
+            if not is_outside(paths, roots):
+                continue
+            if not plugin_adopted_gallery(gal, source):
+                skipped_not_ours += 1
+                continue
+            studio_name = ((gal.get("studio") or {}).get("name") or "")
+            username = studio_name.split(" (")[0]
+            update = build_gallery_cleanup_update(gal, source, username)
+            if update is None:
+                continue
+            log.LogInfo("  Stray gallery {} [{}] '{}': {}".format(
+                gal["id"], studio_name or "no studio", gal.get("title") or "",
+                paths[0]))
+            tasks.append(_folder_gallery_task(client, update))
+
     if skipped_not_ours:
         log.LogInfo(
             "Left alone: {} item(s) outside the data paths that carry one of "
@@ -1112,6 +1176,52 @@ def _media_paths(item):
     paths = [f.get("path") for f in (item.get("files") or [])]
     paths += [vf.get("path") for vf in (item.get("visual_files") or [])]
     return [p for p in paths if p]
+
+
+def gallery_paths(gal):
+    """Where a gallery lives: its folder, or its zip file. A gallery this
+    plugin created has neither, so it never counts as outside anything."""
+    paths = [(gal.get("folder") or {}).get("path")]
+    paths += [f.get("path") for f in (gal.get("files") or [])]
+    return [p for p in paths if p]
+
+
+def gallery_outside_data_path(gal, source):
+    """True for a folder/zip gallery that sits outside this site's data path.
+
+    The gallery lookups have the same flaw media_under_data_path guards the
+    media ones against: find_folder_galleries passes only the creator's name to
+    Stash's SUBSTRING path filter, over the whole library. The whole-segment
+    check in sync_folder_galleries narrows that but does not confine it -- a
+    torrent folder `/torrents/onlyfans/onlydurden/` has the creator as a whole
+    segment and was adopted like one of the user's own: creator studio,
+    performer, site tag, a "<creator> OnlyFans <dir>" title and organized.
+    """
+    root = (getattr(source, "data_path", "") or "").strip()
+    if not root:
+        return False
+    return is_outside(gallery_paths(gal), [root])
+
+
+def plugin_adopted_gallery(gal, source):
+    """Whether this plugin is what put its metadata on a folder/zip gallery.
+
+    Two writers touch those: sync_folder_galleries, whose title
+    `<creator> <Site> <dir> (<category>)` is built from the gallery's own path
+    and studio and is not something a person types; and the per-post pass,
+    which stamps a post URL on the site's domain. A gallery carrying neither is
+    left alone -- the same bias as plugin_wrote_this: a missed stray keeps some
+    wrong metadata, a false positive destroys curation.
+    """
+    if plugin_wrote_this(gal, source):
+        return True
+    studio_name = ((gal.get("studio") or {}).get("name") or "")
+    username = studio_name.split(" (")[0].strip()
+    folder = (gal.get("folder") or {}).get("path") or ""
+    if not username or not folder:
+        return False
+    return (gal.get("title") or "") == folder_gallery_title(
+        username, folder, source)
 
 
 def media_under_data_path(items, source, username, kind):
@@ -1318,6 +1428,8 @@ def sync_collection_galleries(client, db, profile, processor, studios, performer
     by_url = {}
     if studio_id:
         for gal in client.find_galleries_for_studio(studio_id):
+            if gallery_outside_data_path(gal, source):
+                continue
             for u in gal.get("urls") or []:
                 by_url[u] = gal
 
@@ -1423,10 +1535,14 @@ def build_post_galleries(client, db, profile, processor, performers, tags,
     user_id = profile["user_id"]
     groups = group_media_by_post(db, user_id, all_scenes, all_images)
 
-    # Existing per-post galleries for this creator's studio, keyed by url.
+    # Existing per-post galleries for this creator's studio, keyed by url. A
+    # folder gallery outside the data path is never the post's, whatever an
+    # earlier sync stamped on it.
     by_url = {}
     if studio_id:
         for gal in client.find_galleries_for_studio(studio_id):
+            if gallery_outside_data_path(gal, source):
+                continue
             for u in gal.get("urls") or []:
                 by_url[u] = gal
 
@@ -1674,6 +1790,11 @@ def sync_folder_galleries(client, profile, studio_id, creator_ids, tags,
         # creator's name is a whole path segment -- otherwise 'jake' would also
         # claim '/data/jakeson/...'.
         if target not in segments:
+            continue
+        # ...and a whole segment is still not confinement: a torrent folder
+        # named after the creator passes it. Only the configured library is
+        # the creator's.
+        if gallery_outside_data_path(gal, source):
             continue
         if not full_sync and gal.get("organized"):
             continue
@@ -2097,8 +2218,8 @@ def main():
                   "skipped_multifile": 0}
         cleanup_stray_media(client, configured_sources, None, workers, totals)
         log.LogProgress(1.0)
-        summary = "Cleanup complete. Items reverted: {}".format(
-            totals["scenes"] + totals["images"])
+        summary = "Cleanup complete. Items reverted: {} ({} galleries)".format(
+            totals["scenes"] + totals["images"], totals["galleries"])
         if client.dry_run:
             summary += " (dry run -- nothing was written)"
         log.LogInfo(summary)

@@ -495,13 +495,41 @@ class StashClient:
         query FindGalleries($f: GalleryFilterType!) {
             findGalleries(gallery_filter: $f, filter: { per_page: -1 }) {
                 galleries {
-                    id code urls folder { path }
+                    id code urls folder { path } files { path }
                     tags { id } performers { id }
                 }
             }
         }
         """
         variables = {"f": {"studios": {"value": [studio_id], "modifier": "INCLUDES"}}}
+        return self.call(query, variables)["findGalleries"]["galleries"]
+
+    def find_galleries_under_studio(self, studio_id):
+        """Every gallery whose studio is `studio_id` or beneath it, with the
+        fields the cleanup pass reverts and the paths it judges them by.
+
+        The cleanup counterpart of find_media_under_studio. `folder` and `files`
+        are fetched because a gallery's location is only known through them: a
+        folder gallery has a folder, a zip gallery a file, and a plugin-made one
+        neither -- which is what keeps the latter out of the "outside the data
+        path" test entirely.
+        """
+        query = """
+        query FindGalleries($f: GalleryFilterType!) {
+            findGalleries(gallery_filter: $f, filter: { per_page: -1 }) {
+                galleries {
+                    id title organized urls photographer details date code
+                    tags { id name } performers { id name }
+                    studio { id name }
+                    folder { path }
+                    files { path }
+                }
+            }
+        }
+        """
+        variables = {"f": {"studios": {
+            "value": [studio_id], "modifier": "INCLUDES", "depth": -1,
+        }}}
         return self.call(query, variables)["findGalleries"]["galleries"]
 
     def find_folder_galleries(self, path):

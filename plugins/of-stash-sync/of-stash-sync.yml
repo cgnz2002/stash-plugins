@@ -1,6 +1,6 @@
 name: Fan Site Metadata Sync (OnlyFans + JustFor.Fans + Patreon)
 description: Sync scraped metadata (title, details, date, post URL, performers, studio, tags) from OF-Scraper and jff-scraper user_data.db files, and from patreon-dl's on-disk post files, into matching Stash scenes and images, group each post's media into a gallery, and adopt the galleries Stash makes from scanned image folders. Each database's site is detected from the database itself.
-version: 2.14.0
+version: 2.15.0
 url: https://github.com/cgnz2002/stash-plugins
 
 settings:
@@ -155,12 +155,12 @@ tasks:
       site: patreon
       dryRun: true
   - name: Preview Cleanup of Stray Media (Dry Run)
-    description: "SAFE, WRITES NOTHING. Lists every scene and image that carries one of this plugin's studios but sits OUTSIDE every configured data path - media an older version reached by mistake, because Stash's path filter matches a creator's name anywhere in your library (e.g. a creator called 'Mirenac' matched /torrents/downloads/whisparr/[Mirenac] .../1.png). Run this FIRST and read the log."
+    description: "SAFE, WRITES NOTHING. Lists every scene, image and folder gallery that carries one of this plugin's studios but sits OUTSIDE every configured data path - media an older version reached by mistake, because Stash's path filter matches a creator's name anywhere in your library (e.g. a creator called 'Mirenac' matched /torrents/downloads/whisparr/[Mirenac] .../1.png). Run this FIRST and read the log."
     defaultArgs:
       mode: cleanup
       dryRun: true
   - name: Clean Up Stray Media
-    description: "Undoes what an older version wrote onto media outside your data paths: clears the title, details, date, code, studio, this plugin's tags, the post URL and the creator performer, and sets organized back to false so the media returns to whatever 'not yet sorted' workflow it came from. Only ever touches media that is OUTSIDE every configured data path AND still carries a post URL this plugin wrote. Media you organised yourself is never touched, even when you filed it under the same parent studio - a studio under that parent is not evidence the plugin wrote anything, since torrented fan-site content is reasonably filed there too. Anything carrying a stash-box ID (FansDB, StashDB) is also left alone: a scrape writes the same kind of post URL and studio name this plugin does, so the ID is the only thing that tells them apart. The originals cannot be restored, so preview first."
+    description: "Undoes what an older version wrote onto media outside your data paths: clears the title, details, date, code, studio, this plugin's tags, the post URL and the creator performer, and sets organized back to false so the media returns to whatever 'not yet sorted' workflow it came from. Also takes those items out of this plugin's own post galleries, and reverts folder galleries outside your data paths that a sync adopted (only ones still carrying the exact '<creator> <Site> <folder>' title it gave them, or a post URL it wrote). Only ever touches media that is OUTSIDE every configured data path AND still carries a post URL this plugin wrote. Media you organised yourself is never touched, even when you filed it under the same parent studio - a studio under that parent is not evidence the plugin wrote anything, since torrented fan-site content is reasonably filed there too. Anything carrying a stash-box ID (FansDB, StashDB) is also left alone: a scrape writes the same kind of post URL and studio name this plugin does, so the ID is the only thing that tells them apart. The originals cannot be restored, so preview first."
     defaultArgs:
       mode: cleanup
   - name: Sync Performer

@@ -335,7 +335,20 @@ run, so there is no per-site task:
   all), and `build_folder_gallery_update` returns None when nothing would change
   so re-runs write nothing. The creator is matched by whole **path segment**, not
   substring, because Stash's `path` filter is a substring match and would
-  otherwise let `jake` claim `/data/jakeson/...`.
+  otherwise let `jake` claim `/data/jakeson/...`. **A whole segment is still
+  not confinement**: `/torrents/onlyfans/onlydurden/` passes it, and was
+  adopted like the user's own folder. So `gallery_outside_data_path` also
+  confines it to the site's data path — and the per-post and collection
+  `by_url` lookups too, since a folder gallery anywhere can carry a stamped
+  post URL. A plugin-made gallery has no path, so it is never "outside".
+  `mode: cleanup` reverts the ones already adopted: a folder/zip gallery
+  outside every data path counts as ours only if it carries the exact
+  `folder_gallery_title` (built from its own path and studio, not something a
+  person types) or a post URL on the site's domain (`plugin_adopted_gallery`).
+  The revert follows the evidence (`build_gallery_cleanup_update`): a title
+  fingerprint undoes only the five fields `sync_folder_galleries` sets, so the
+  gallery's own details/date survive; a URL fingerprint reverts like media.
+  A gallery photographer is never cleared — the plugin never writes one.
 - **Media queries are confined to the site's data path**
   (`media_under_data_path`). Stash's `path` filter is a plain **substring**
   match over the **whole library**, and `find_scenes`/`find_images` pass only
