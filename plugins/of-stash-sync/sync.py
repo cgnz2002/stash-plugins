@@ -1355,6 +1355,30 @@ def group_media_by_post(db, user_id, all_scenes, all_images):
         if stash_id not in bucket:
             bucket.append(stash_id)
 
+    # Stash media no source row reached, placed by the post FOLDER holding it
+    # (Patreon only; a scraper database answers None). That is how an image
+    # Stash read out of a post's zip finds its post: its path runs through the
+    # zip, so no disk walk ever indexed it, yet structurally it can belong to
+    # nothing else -- which a basename could never promise.
+    claimed = set()
+    for g in groups.values():
+        claimed.update(("image", i) for i in g["images"])
+        claimed.update(("scene", s) for s in g["scenes"])
+    for path, entry in sorted(index.items()):
+        if entry in claimed:
+            continue
+        post_id = db.post_for_path(path)
+        if post_id is None:
+            continue
+        g = groups.setdefault(str(post_id), {
+            "images": [], "scenes": [], "posted_at": None, "api_type": None,
+        })
+        kind, stash_id = entry
+        bucket = g["images"] if kind == "image" else g["scenes"]
+        if stash_id not in bucket:
+            bucket.append(stash_id)
+        claimed.add(entry)
+
     # A source that supplies paths but matches none of them means the plugin's
     # data path and Stash's library path disagree -- a wholly recoverable
     # misconfiguration that would otherwise look like "the sync just does
@@ -1809,6 +1833,119 @@ def sync_folder_galleries(client, profile, studio_id, creator_ids, tags,
     run_writes(tasks, workers, totals)
 
 
+def build_post_folder_gallery_update(gal, gallery_input, full_sync,
+                                     keep_manual_edits, sponsor_ids,
+                                     protected_tags=None):
+    """The post-metadata update for one of Stash's folder/zip galleries, or
+    None when this run should leave it alone.
+
+    The usual organized rule: a plain sync writes only unorganized galleries,
+    a full sync refreshes them all. These are Stash's galleries rather than the
+    plugin's, and some were curated by hand -- performers set, titles fixed,
+    organized ticked -- before this pass ever existed. An organized gallery is
+    the user saying "done", and a routine sync must not overwrite that just
+    because the gallery lacks this post's id.
+    """
+    if not full_sync and gal.get("organized"):
+        return None
+    update = dict(gallery_input)
+    update["id"] = gal["id"]
+    existing_tag_ids = [t["id"] for t in gal.get("tags") or []]
+    if keep_manual_edits:
+        merged = list(update["performer_ids"])
+        for p in gal.get("performers") or []:
+            if p["id"] not in merged:
+                merged.append(p["id"])
+        update["performer_ids"] = [
+            pid for pid in merged if pid not in sponsor_ids
+        ] or list(gallery_input["performer_ids"])
+        merged_tags = list(update.get("tag_ids") or [])
+        for tid in existing_tag_ids:
+            if tid not in merged_tags:
+                merged_tags.append(tid)
+        update["tag_ids"] = merged_tags
+    if protected_tags:
+        protected_tags.merge_into(update.setdefault("tag_ids", []),
+                                  existing_tag_ids)
+    return update
+
+
+def sync_post_folder_galleries(client, db, profile, processor, performers,
+                               tags, tag_matcher, studio_id, creator_ids,
+                               creator_roles, creator_name, full_sync,
+                               keep_manual_edits, workers, all_scenes,
+                               all_images, totals, source,
+                               creator_sponsor=False, protected_tags=None):
+    """Write each post's metadata onto the galleries Stash made from it.
+
+    For a site that downloads each post into its own folder (Patreon), Stash's
+    folder gallery of that post's images/ -- or its zip gallery for a zip in
+    attachments/ -- already IS the post's gallery. Building another one
+    beside it is how every multi-image post ended up in Stash twice, and the
+    built copy's membership was the plugin's to get wrong. Here Stash owns
+    membership outright (it refuses any change to a folder or zip gallery's
+    images), so the plugin only supplies what Stash cannot know: the post's
+    title, text, date, URL, studio, cast and tags, and the link to the
+    post's video.
+
+    A post with images in more than one folder gets its metadata on each of
+    those galleries. Galleries that map to no post -- the auxiliary
+    post_info/, .thumbnails/ and image_previews/ folders, or anything outside
+    a post folder -- are left alone.
+    """
+    root = getattr(db, "path", None)
+    if not root:
+        return
+    try:
+        galleries = client.find_located_galleries(root)
+    except RuntimeError as e:
+        log.LogWarning("Could not list galleries under '{}': {}".format(root, e))
+        return
+
+    # The path filter is a substring match; only galleries really inside this
+    # creator's folder are theirs.
+    prefix = os.path.normpath(root) + os.sep
+    groups = group_media_by_post(db, profile["user_id"], all_scenes, all_images)
+    username = profile["username"]
+
+    tasks = []
+    for gal in galleries:
+        paths = gallery_paths(gal)
+        if not any((os.path.normpath(p) + os.sep).startswith(prefix)
+                   for p in paths):
+            continue
+        post_id = None
+        for p in paths:
+            post_id = db.post_for_path(p)
+            if post_id is not None:
+                break
+        if post_id is None:
+            continue
+        post_id = str(post_id)
+        url = source.post_url(db, post_id, username)
+        if not url:
+            continue
+        group = groups.get(post_id) or {
+            "images": [], "scenes": [], "posted_at": None, "api_type": None,
+        }
+        gallery_input, title, sponsor_ids = _gallery_meta(
+            db, processor, profile, post_id, group, performers, tags,
+            tag_matcher, studio_id, creator_ids, creator_roles, creator_name,
+            url, group["scenes"], source, creator_sponsor,
+        )
+        update = build_post_folder_gallery_update(
+            gal, gallery_input, full_sync, keep_manual_edits,
+            sponsor_ids, protected_tags,
+        )
+        if update is None:
+            continue
+        tasks.append(_folder_gallery_task(client, update))
+
+    if tasks:
+        log.LogInfo("  {} post gallery/galleries to update".format(len(tasks)))
+    run_writes(tasks, workers, totals)
+
+
 def _folder_gallery_task(client, update):
     def task():
         client.update_gallery(update)
@@ -1944,7 +2081,12 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
         # jff-scraper, whose filenames are media ids; on Patreon the same
         # basename really can appear under several posts (the same video posted
         # at two tiers), and only the path says which post this file belongs to.
+        # Between the two, the post FOLDER that holds the path (Patreon only):
+        # an image Stash read out of a post's zip has a path through the zip
+        # that no disk walk indexed, but it is still structurally that post's
+        # -- unlike its basename, which another post may well share.
         media_row = (db.media_by_path(user_id, path)
+                     or db.media_for_path(user_id, path)
                      or db.media_by_filename(user_id, basename))
         if not media_row:
             # Logged so an unexplained "Skipped: n" can be traced to the actual
@@ -1992,12 +2134,25 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
         tag_post_galleries(client, db, profile, processor, tags, tag_matcher,
                            workers, totals, source)
     elif not crew_only:
-        build_post_galleries(
-            client, db, profile, processor, performers, tags, tag_matcher,
-            studio_id, performer_ids, creator_roles, creator_name, full_sync,
-            keep_manual_edits, workers, all_scenes, all_images, totals, source,
-            creator_sponsor, protected_tags,
-        )
+        # Per-post galleries. Where each post has its own folder (Patreon),
+        # Stash's galleries of those folders ARE the post galleries and get the
+        # post's metadata; building a second gallery beside each would just
+        # duplicate it. Elsewhere media is filed by type, so the plugin builds
+        # one gallery per post itself.
+        if source.post_folders:
+            sync_post_folder_galleries(
+                client, db, profile, processor, performers, tags, tag_matcher,
+                studio_id, performer_ids, creator_roles, creator_name,
+                full_sync, keep_manual_edits, workers, all_scenes, all_images,
+                totals, source, creator_sponsor, protected_tags,
+            )
+        else:
+            build_post_galleries(
+                client, db, profile, processor, performers, tags, tag_matcher,
+                studio_id, performer_ids, creator_roles, creator_name,
+                full_sync, keep_manual_edits, workers, all_scenes, all_images,
+                totals, source, creator_sponsor, protected_tags,
+            )
         # Creator-curated collections (Patreon only; every other source returns
         # none), flattened into one gallery each.
         sync_collection_galleries(
@@ -2006,11 +2161,14 @@ def process_profile(client, db, profile, processor, studios, performers, tags,
             source, protected_tags,
         )
         # Stash's own folder galleries (one per scanned image folder) arrive with
-        # no performer, studio or real title -- adopt them too.
-        sync_folder_galleries(
-            client, profile, studio_id, performer_ids, tags, full_sync,
-            workers, totals, source,
-        )
+        # no performer, studio or real title -- adopt them too. Not where post
+        # folders exist: those galleries were just given their post's metadata,
+        # and the generic "<creator> <Site> <dir>" title would overwrite it.
+        if not source.post_folders:
+            sync_folder_galleries(
+                client, profile, studio_id, performer_ids, tags, full_sync,
+                workers, totals, source,
+            )
 
 
 def main():

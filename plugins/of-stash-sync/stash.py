@@ -532,6 +532,31 @@ class StashClient:
         }}}
         return self.call(query, variables)["findGalleries"]["galleries"]
 
+    def find_located_galleries(self, path):
+        """Folder and zip galleries whose path contains `path`.
+
+        A located gallery is one Stash made from something on disk -- a folder
+        of images or a zip -- as opposed to one created through the API, which
+        has neither. Both kinds are returned (unlike find_folder_galleries)
+        because a Patreon post can arrive as either: its images/ folder, or a
+        zip in its attachments/. `path` is a substring match server-side, so
+        callers must confine the result themselves.
+        """
+        query = """
+        query FindGalleries($f: GalleryFilterType!) {
+            findGalleries(gallery_filter: $f, filter: { per_page: -1 }) {
+                galleries {
+                    id title code organized urls
+                    folder { path } files { path }
+                    studio { id } tags { id } performers { id }
+                }
+            }
+        }
+        """
+        variables = {"f": {"path": {"value": path, "modifier": "INCLUDES"}}}
+        galleries = self.call(query, variables)["findGalleries"]["galleries"]
+        return [g for g in galleries if g.get("folder") or g.get("files")]
+
     def find_folder_galleries(self, path):
         """Galleries Stash generated from scanned folders whose path contains
         `path`.

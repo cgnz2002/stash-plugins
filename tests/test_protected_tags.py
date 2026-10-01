@@ -225,8 +225,14 @@ assert stash._mutation_field(
 
 # --- every replacing site is wired; the additive ones need nothing ----------
 sync_src = open(plugin_file("sync.py"), encoding="utf-8").read()
-assert sync_src.count("protected_tags.merge_into(") == 3, \
-    "build_update, post galleries and collection galleries must all protect"
+assert sync_src.count("protected_tags.merge_into(") == 4, \
+    ("build_update, built post galleries, post FOLDER galleries (Patreon) and "
+     "collection galleries must all protect")
+# The post-folder pass replaces tag_ids on Stash's own galleries -- exactly the
+# ones comic-reader marks as Webtoons -- so it must protect too.
+seg = sync_src[sync_src.index("def build_post_folder_gallery_update"):]
+seg = seg[:seg.index("\ndef ", 1)]
+assert "protected_tags.merge_into(" in seg
 # build_tag_only_update and build_crew_only_update only ever ADD tags
 for fn in ["def build_tag_only_update", "def build_crew_only_update"]:
     seg = sync_src[sync_src.index(fn):]

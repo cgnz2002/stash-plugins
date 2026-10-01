@@ -539,6 +539,32 @@ asks the profile what to open.
   their own call site in `sync_collection_galleries` — they don't route through
   `SourceProfile.title()`, so adding a title path means checking it reaches
   there as well.
+- **Post galleries are Stash's folder/zip galleries, not built ones**
+  (`SourceProfile.post_folders`, True only for Patreon). patreon-dl gives every
+  post its own folder, so the gallery Stash makes from it already IS the post's
+  gallery; building another beside it (what `build_post_galleries` does for
+  the scraper sites) put every multi-image post in Stash twice, and the built
+  copy's membership was the plugin's to get wrong — which is how one image sat
+  in four unrelated comics' galleries. `sync_post_folder_galleries` instead
+  finds the creator's folder and zip galleries (`find_located_galleries`,
+  confined to the creator folder because the path filter is a substring), maps
+  each to its post with `PatreonLibrary.post_for_path` (walks up to the nearest
+  post folder; None inside `EXCLUDED_DIRS`), and writes `_gallery_meta` onto it,
+  including `scene_ids` — Stash validates only *image* membership on folder/zip
+  galleries (`pkg/gallery/validation.go`), so scene links are allowed. It never
+  creates a gallery or attaches an image. `sync_folder_galleries` is skipped
+  for such sources, or its generic title would overwrite the post's. The plain
+  sync uses the strict organized rule (skip any organized gallery) because
+  these are the *user's* galleries and some were hand-curated before this
+  pass existed. OF-Scraper/jff-scraper file media by type, not post, so they
+  keep built galleries.
+- **Images inside a zip are matched by post folder.** Stash gives a zip
+  member the path `<zip>/<inner>` (`pkg/file/zip.go`, `filepath.Rel(zipPath,
+  name)`), which no disk walk indexed. `media_for_path` / `post_for_path`
+  place it in the post whose folder holds the zip — used **between** the exact
+  path and the basename fallback in both `process_profile` and
+  `group_media_by_post`, because a zip's `01.png` is exactly the kind of
+  basename another post shares.
 - **Collections → one flat gallery each** (`sync_collection_galleries`), holding
   member posts' images and linking their scenes. Stash has no nested galleries
   and no gallery→group link, so a gallery *of* galleries is impossible; Groups

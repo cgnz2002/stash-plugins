@@ -113,6 +113,19 @@ class SourceDatabase:
         """
         return None
 
+    def post_for_path(self, path):
+        """Always None: a scraper database has no post folders to locate.
+
+        Patreon's adapter answers this so a folder or zip gallery can be traced
+        to the post it holds; OF-Scraper and jff-scraper lay files out by
+        content type, not by post, so no path names a post here.
+        """
+        return None
+
+    def media_for_path(self, user_id, path):
+        """Always None, for the same reason as post_for_path."""
+        return None
+
     def media_by_filename(self, user_id, filename):
         date = "{} AS posted_at".format(self._date_col)
         if self._has_model_id:
