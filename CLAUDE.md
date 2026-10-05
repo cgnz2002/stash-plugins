@@ -809,7 +809,8 @@ its README. What matters when changing it:
 - **The tag-only and crew/sponsor paths are surgical.** `build_tag_only_update`
   only ever adds tags; `build_crew_only_update` only ever touches
   `performer_ids`, the `director`/`photographer` field, and `tag_ids` — the last
-  one **additively and only to add `sponsored`** — and returns `(None, None)`
+  one **additively and only to add `sponsored` or a content house's tag** —
+  and returns `(None, None)`
   when nothing changes. Both leave all other fields untouched (Stash only
   mutates fields you send), so manual edits survive. Keep them that way.
 - Updates set `organized: True` so the normal `sync` pass skips them next time —
