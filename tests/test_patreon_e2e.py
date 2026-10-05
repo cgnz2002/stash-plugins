@@ -71,6 +71,11 @@ class FakeResolver:
     def is_sponsor(self, username):
         return False
 
+    content_house_tag_id = ""
+
+    def is_content_house(self, username):
+        return False
+
 
 profile = {"username": "mrxtoon", "user_id": "mrxtoon"}
 row = lib.media_by_filename("mrxtoon", "38354242-preview.mp4")

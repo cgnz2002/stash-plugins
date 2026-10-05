@@ -164,6 +164,7 @@ Both current and older OF-Scraper database layouts are supported.
 | Title Exclusions | (empty) | Phrases/regexes stripped from generated **titles** only (the description keeps the original post text). Best edited via **Settings → Tools → "Fan Site Sync: Title Exclusions"** (a list editor like Stash's scan Exclusions). See below. |
 | Crew Tag ID | (empty) | The Stash tag **ID** (from the tag's URL, e.g. `.../tags/42` → `42`) marking crew performers. A performer with this tag has their name put in each scene's Director field and each image's Photographer field instead of the performers list. Applies to the creator and any collaborator credited by `@mention` or profile URL (`onlyfans.com/username`). Empty disables crew handling. |
 | Sponsor Tag ID | (empty) | The Stash tag **ID** marking **sponsor** performers (brands/advertisers). A performer with this tag is **removed** from the performers list and the scene/image/gallery is tagged `sponsored` instead — Stash has no field to credit a sponsor in. Unlike crew, sponsors are dropped from galleries too. Applies to the creator and any collaborator credited by `@mention` or profile URL. Empty disables sponsor handling. See below. |
+| Content House Tag ID | (empty) | The Stash tag **ID** marking performers that are really **content houses** — a production house, filming location, fan site, any account that isn't a person. The tag can be named anything. A credited content house is **removed** from the performers list (scenes, images and galleries) and the media gets **a tag named after it** instead, so its content stays filterable. Empty disables it. See below. |
 
 ## Tasks
 
@@ -397,6 +398,32 @@ Details worth knowing:
   never be cleaned out.
 - Leave *Sponsor Tag ID* empty and nothing changes — sponsor handling is off and
   those accounts stay ordinary performers.
+
+### Content houses (studios, locations, sites)
+
+Some accounts get `@mention`ed like a collaborator but aren't people at all — a
+content house, a filming location, a fan site. They aren't crew and they aren't
+sponsors, and Stash has no location field. Mark their performer with a tag (call
+it anything, e.g. *Content House*), and put that tag's ID in **Content House Tag
+ID**.
+
+From then on, on any sync or the **Update Crew & Sponsors** task, a credited
+content house is **removed from the performers list** and the media gets **a tag
+named after it** — one tag per house, so you can still filter everything filmed
+there.
+
+- **An existing tag is reused** if its name or an alias matches the `@name` or
+  the performer's name (`@raunchhouse` or *Raunch House*). Otherwise one is
+  created under the `@name`, as written.
+- **Organise those tags yourself.** Put them under your own parent tag (a
+  *Location* tag group, say). The plugin finds them by name and alias, so moving
+  or nesting them changes nothing.
+- **Galleries drop them too**, like sponsors.
+- **Only ever added, never removed**, and *Keep Manual Performers & Tags*
+  doesn't keep a content house in the cast, for the same reasons as sponsors.
+- It applies to **credited** accounts. The creator whose library is being read
+  is already the studio.
+- Leave the setting empty and nothing changes.
 
 ### Title exclusions (cleaning up boilerplate titles)
 
