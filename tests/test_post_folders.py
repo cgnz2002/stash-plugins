@@ -114,6 +114,11 @@ class FakeResolver:
     def is_sponsor(self, username):
         return False
 
+    content_house_tag_id = ""
+
+    def is_content_house(self, username):
+        return False
+
 
 class FakeClient:
     def __init__(self, galleries):

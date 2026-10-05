@@ -143,7 +143,8 @@ def parse_title_exclusions(raw):
 class PerformerResolver:
     """Find performers by name/alias, optionally creating missing ones."""
 
-    def __init__(self, client, auto_create, crew_tag_id="", sponsor_tag_id=""):
+    def __init__(self, client, auto_create, crew_tag_id="", sponsor_tag_id="",
+                 content_house_tag_id=""):
         self.client = client
         self.auto_create = auto_create
         # Matched by tag id (stable) rather than name, so renaming the tag in
@@ -153,13 +154,18 @@ class PerformerResolver:
         # advertiser, not someone in the media, so they are dropped from the
         # performers list and the media is tagged 'sponsored' instead.
         self.sponsor_tag_id = str(sponsor_tag_id or "").strip()
+        # And for content houses: a production house, filming location or site
+        # credited like a person. Dropped from the performers list too, but
+        # the media gets a tag named after it rather than one generic tag, so
+        # everything filmed there stays filterable.
+        self.content_house_tag_id = str(content_house_tag_id or "").strip()
         self.cache = {}
         # The site currently being processed; only used for the URL put on a
         # performer this resolver creates. Set per database by process_profile,
         # since databases are processed one at a time.
         self.source = sources.ONLYFANS
-        # username -> {"roles": set(), "name": str, "sponsor": bool} for the
-        # crew-credit and sponsor logic
+        # username -> {"roles": set(), "name": str, "sponsor": bool,
+        # "content_house": bool} for the crew, sponsor and content-house logic
         self.info_cache = {}
         # lowercase name/alias -> [performers]; built once from a single bulk
         # fetch so the common "performer exists" path needs no per-username query.
@@ -212,6 +218,12 @@ class PerformerResolver:
         info = self.info_cache.get(username.lower())
         return bool(info and info.get("sponsor"))
 
+    def is_content_house(self, username):
+        """Whether a credited account carries the Content House Tag. resolve() must
+        have been called first (same contract as is_sponsor)."""
+        info = self.info_cache.get(username.lower())
+        return bool(info and info.get("content_house"))
+
     def resolve(self, username, from_mention=False, source=None):
         """Performer ids for a username, creating one if allowed.
 
@@ -239,10 +251,13 @@ class PerformerResolver:
         roles = set()
         credit_name = None
         sponsor = False
+        content_house = False
         for p in exact:
             ptag_ids = {t.get("id") for t in (p.get("tags") or [])}
             if self.sponsor_tag_id and self.sponsor_tag_id in ptag_ids:
                 sponsor = True
+            if self.content_house_tag_id and self.content_house_tag_id in ptag_ids:
+                content_house = True
             if self.crew_tag_id and self.crew_tag_id in ptag_ids and not roles:
                 roles = {"director", "photographer"}
                 credit_name = p.get("name")
@@ -250,6 +265,7 @@ class PerformerResolver:
             credit_name = exact[0]["name"]
         self.info_cache[key] = {
             "roles": roles, "name": credit_name, "sponsor": sponsor,
+            "content_house": content_house,
         }
         if not ids and self.auto_create:
             # Stash treats EQUALS as a SQL LIKE, so a username containing '_'
@@ -466,6 +482,28 @@ class TagResolver:
         self.cache[key] = tag_id
         return tag_id
 
+    def resolve_any(self, names):
+        """The first of `names` that already exists as a tag name or alias,
+        else a new tag named after the first.
+
+        For a content house credited as `@raunchhouse` whose performer is called
+        `Raunch House`: a tag the user already made under either spelling is
+        reused, and only when neither exists is one created -- under the
+        @name, as written.
+        """
+        names = [n for n in names if (n or "").strip()]
+        if not names:
+            return None
+        self._ensure_index()
+        for name in names:
+            key = name.strip().lower()
+            if key in self.cache and self.cache[key]:
+                return self.cache[key]
+            if key in self._index:
+                self.cache[key] = self._index[key]
+                return self._index[key]
+        return self.resolve(names[0])
+
 
 class TagTextMatcher:
     """Match existing Stash tags against post text, the way Stash's built-in
@@ -611,13 +649,14 @@ def collect_crew(processor, resolver, text, creator_roles, creator_name,
             )
             m_roles, m_name = resolver.creator_credit(mention)
             m_sponsor = resolver.is_sponsor(mention)
+            m_house = resolver.is_content_house(mention)
             if m_sponsor:
                 sponsor_ids.update(ids)
             if m_roles:
                 if m_name:
                     crew.append((m_roles, m_name))
                 crew_ids.update(ids)
-            elif not m_sponsor:
+            elif not m_sponsor and not m_house:
                 for pid in ids:
                     if pid not in mention_performer_ids:
                         mention_performer_ids.append(pid)
@@ -630,6 +669,44 @@ def collect_crew(processor, resolver, text, creator_roles, creator_name,
             photographer_names.append(name)
     return (director_names, photographer_names, crew_ids, mention_performer_ids,
             sponsor_ids)
+
+
+def collect_content_houses(processor, resolver, tags, text):
+    """Content houses credited in a post: (performer ids to drop, tag ids to add).
+
+    A content house -- a production house, filming location, fan site, any
+    account that isn't a person -- gets credited like a person, but it
+    is neither a performer, crew nor a sponsor, and Stash has no location
+    field. So its performer is dropped from the media and replaced by a tag
+    named after it -- one tag per house rather than a generic one, which
+    keeps everything filmed there filterable, and which the user can file
+    under their own parent tag by hand.
+
+    The tag is looked up by the @name as written and then by the performer's
+    display name, as a tag name OR alias, before one is created under the
+    @name -- so a tag the user already made is reused rather than duplicated.
+
+    Credited accounts only: the creator is already represented by the studio.
+    """
+    drop, tag_ids = set(), []
+    if not text or not resolver.content_house_tag_id:
+        return drop, tag_ids
+    for mention, domain in processor.parse_mentions(text):
+        # resolve() first: is_content_house() reads the cache resolve() fills.
+        ids = resolver.resolve(
+            mention, from_mention=True,
+            source=sources.profile_for_domain(domain),
+        )
+        if not resolver.is_content_house(mention):
+            continue
+        drop.update(ids)
+        if tags is None:
+            continue
+        _roles, name = resolver.creator_credit(mention)
+        tag_id = tags.resolve_any([mention, name])
+        if tag_id and tag_id not in tag_ids:
+            tag_ids.append(tag_id)
+    return drop, tag_ids
 
 
 def build_crew_only_update(db, processor, media_row, creator_ids, creator_roles,
@@ -655,7 +732,9 @@ def build_crew_only_update(db, processor, media_row, creator_ids, creator_roles,
 
     # Prune credited crew and sponsors from the existing performers; never leave
     # it empty (the creator goes back in rather than stripping the media bare).
-    drop = crew_ids | sponsor_ids
+    house_ids, house_tag_ids = collect_content_houses(
+        processor, resolver, tags, text)
+    drop = crew_ids | sponsor_ids | house_ids
     new_perf = [pid for pid in existing_performer_ids if pid not in drop]
     if not new_perf:
         new_perf = list(creator_ids)
@@ -674,6 +753,12 @@ def build_crew_only_update(db, processor, media_row, creator_ids, creator_roles,
         sponsor_tag_id = tags.resolve(SPONSORED_TAG)
         if sponsor_tag_id and sponsor_tag_id not in merged_tags:
             merged_tags.append(sponsor_tag_id)
+    # A content house's tag, likewise added only.
+    added_houses = 0
+    for tag_id in house_tag_ids:
+        if tag_id not in merged_tags:
+            merged_tags.append(tag_id)
+            added_houses += 1
 
     perf_changed = new_perf != list(existing_performer_ids)
     credit_changed = credit is not None and credit != (existing_credit or "")
@@ -692,7 +777,10 @@ def build_crew_only_update(db, processor, media_row, creator_ids, creator_roles,
         parts.append("{}={}".format(field, credit))
     if tags_changed:
         update["tag_ids"] = merged_tags
-        parts.append("+{}".format(SPONSORED_TAG))
+        if len(merged_tags) - added_houses > len(existing_tag_ids):
+            parts.append("+{}".format(SPONSORED_TAG))
+        if added_houses:
+            parts.append("+{} content-house tag(s)".format(added_houses))
     return update, ", ".join(parts)
 
 
@@ -725,6 +813,8 @@ def build_update(db, processor, profile, media_row, creator_ids, studio_id,
     # plus any credited accounts that are neither. If everyone credited turned
     # out to be crew or a sponsor, fall back to the creator so the media is
     # never performer-less.
+    house_ids, house_tag_ids = collect_content_houses(
+        processor, resolver, tags, text)
     performer_ids = [] if (creator_roles or creator_sponsor) else list(creator_ids)
     for pid in mention_performer_ids:
         if pid not in performer_ids:
@@ -733,7 +823,7 @@ def build_update(db, processor, profile, media_row, creator_ids, studio_id,
     # you added by hand) instead of replacing the list. Crew- and Sponsor-tagged
     # accounts are still pulled out, so both features keep working.
     if keep_manual_edits and existing_performer_ids:
-        drop = crew_ids | sponsor_ids
+        drop = crew_ids | sponsor_ids | house_ids
         for pid in existing_performer_ids:
             if pid not in performer_ids:
                 performer_ids.append(pid)
@@ -748,6 +838,10 @@ def build_update(db, processor, profile, media_row, creator_ids, studio_id,
         sponsor_tag_id = tags.resolve(SPONSORED_TAG)
         if sponsor_tag_id and sponsor_tag_id not in tag_ids:
             tag_ids.append(sponsor_tag_id)
+    # A content house has no field either; its own tag carries it.
+    for tag_id in house_tag_ids:
+        if tag_id not in tag_ids:
+            tag_ids.append(tag_id)
     # Non-destructive mode: keep any tags already on the media (manual tags)
     # instead of replacing the list; the post's tags are added alongside.
     if keep_manual_edits and existing_tag_ids:
@@ -826,6 +920,11 @@ def _gallery_meta(db, processor, profile, post_id, group, performers, tags,
             if performers.is_sponsor(mention):
                 sponsor_ids.update(ids)
                 continue
+            # Content houses are dropped from galleries as well: crew stay
+            # because their credit field loses the performer link, and a house
+            # has no credit field at all -- its tag is the whole record.
+            if performers.is_content_house(mention):
+                continue
             for pid in ids:
                 if pid not in performer_ids:
                     performer_ids.append(pid)
@@ -838,6 +937,11 @@ def _gallery_meta(db, processor, profile, post_id, group, performers, tags,
         sponsor_tag_id = tags.resolve(SPONSORED_TAG)
         if sponsor_tag_id and sponsor_tag_id not in gallery_tag_ids:
             gallery_tag_ids.append(sponsor_tag_id)
+    house_ids, house_tag_ids = collect_content_houses(
+        processor, performers, tags, text)
+    for tag_id in house_tag_ids:
+        if tag_id not in gallery_tag_ids:
+            gallery_tag_ids.append(tag_id)
 
     gallery_input = {
         "title": title,
@@ -861,9 +965,9 @@ def _gallery_meta(db, processor, profile, post_id, group, performers, tags,
         gallery_input["date"] = date
     if scene_ids:
         gallery_input["scene_ids"] = scene_ids
-    # sponsor_ids goes back so the non-destructive merge can prune a sponsor
-    # that an earlier sync (or a hand edit) left on the gallery.
-    return gallery_input, title, sponsor_ids
+    # The ids to prune go back so the non-destructive merge can drop a sponsor
+    # or content house that an earlier sync (or a hand edit) left on the gallery.
+    return gallery_input, title, sponsor_ids | house_ids
 
 
 def is_outside(paths, roots):
@@ -2269,6 +2373,7 @@ def main():
         )
     crew_tag_id = get_setting(config, "crewTagId", "")
     sponsor_tag_id = get_setting(config, "sponsorTagId", "")
+    content_house_tag_id = get_setting(config, "contentHouseTagId", "")
     keep_manual_edits = bool(get_setting(config, "keepManualEdits", False))
     title_exclusions = parse_title_exclusions(get_setting(config, "titleExclusions", ""))
     try:
@@ -2415,7 +2520,8 @@ def main():
     # a side effect of resolving @mentions, even if Create Missing Performers is
     # enabled for the sync tasks.
     performers = PerformerResolver(
-        client, auto_create and not crew_only, crew_tag_id, sponsor_tag_id
+        client, auto_create and not crew_only, crew_tag_id, sponsor_tag_id,
+        content_house_tag_id,
     )
     tags = TagResolver(client)
     # Resolved once per run, not per creator: it is two reads, and the tag tree

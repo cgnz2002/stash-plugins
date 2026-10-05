@@ -190,7 +190,7 @@ manifest). At runtime:
   `main()` returns the error string; keep that contract when adding new
   fatal-exit paths.
 
-The manifest's tasks (15 of them, over 17 settings) are selected by `args.mode`,
+The manifest's tasks (17 of them, over 18 settings) are selected by `args.mode`,
 crossed with the optional `args.site` scope and `args.dryRun` — which is why
 there are far more tasks than modes. Each
 covers **every configured site** — the per-site data paths are all scanned in one
@@ -457,6 +457,22 @@ run, so there is no per-site task:
   stopping at the first crew hit. The tag is only ever **added**, never removed.
   Note `is_sponsor()` reads the cache `resolve()` fills, so it must be called
   *after* `resolve()` for that username.
+- **Content houses** — a third tag id (`contentHouseTagId`, setting *Content
+  House Tag ID*) for accounts that are credited like people but are a
+  production house, filming location or site. Same drop as sponsors (scenes,
+  images **and** galleries; `keepManualEdits` doesn't protect them), but the
+  media gets a tag **named after the house** rather than one shared tag, so
+  its content stays filterable and the user can nest those tags under their
+  own parent. `collect_content_houses` is separate from `collect_crew` so the
+  latter's 5-tuple (used across the tests) is unchanged; `collect_crew` only
+  keeps houses out of `mention_performer_ids`. `TagResolver.resolve_any`
+  reuses an existing tag matching the @name **or** the performer's display
+  name, by name or alias, before creating one under the @name as written.
+  Credited accounts only — the creator is already the studio. Wired into the
+  `crew` pass too, still surgical: performers pruned, tags only added.
+  The setting deliberately avoids the word *location*: the user already has a
+  Location tag group, and the marker tag is matched by id, so it can be
+  named anything.
 
 ### Patreon
 
