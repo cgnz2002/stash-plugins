@@ -880,4 +880,10 @@ Note `build_site.sh` globs `plugins/**/*.yml`, so **every** `.yml` under
   catch that: the plugin needs a live Stash to run, and `ast.parse` accepts an
   undefined name happily -- so a `NameError` on a rarely-taken line reaches a
   user. One did, on the last line of a cleanup run, after all its writes.
+- **Quote any manifest value containing `: ` or ` #`.** An unquoted YAML
+  value with a colon-space reads as a second key, the manifest fails to
+  parse, and Stash drops the plugin **silently** -- gone from Tasks and
+  Settings with no error pointing at it. 3.1.0 shipped exactly that in a task
+  description. `tests/test_manifests.py` checks every manifest (stdlib scan,
+  plus a real parse when PyYAML is installed).
 - Commit messages: short imperative subject lines (see `git log`).
